@@ -1,0 +1,1354 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="726" onload="init(evt)" viewBox="0 0 1200 726" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+		if (currentSearchTerm === null) return;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="726.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >POSIX Pipe Evaluation Profile (15-Run Baseline)</text>
+<text id="details" x="10.00" y="709" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="709" > </text>
+<g id="frames">
+<g >
+<title>tick_nohz_handler (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="165" width="62.7" height="15.0" fill="rgb(248,200,48)" rx="2" ry="2" />
+<text  x="1072.54" y="175.5" >tick_n..</text>
+</g>
+<g >
+<title>___sys_recvmsg (5,050,505 samples, 3.20%)</title><rect x="896.6" y="421" width="37.7" height="15.0" fill="rgb(238,153,36)" rx="2" ry="2" />
+<text  x="899.57" y="431.5" >___..</text>
+</g>
+<g >
+<title>filemap_fdatawrite_wbc (8,181,575 samples, 5.18%)</title><rect x="10.0" y="277" width="61.2" height="15.0" fill="rgb(210,25,6)" rx="2" ry="2" />
+<text  x="13.00" y="287.5" >filema..</text>
+</g>
+<g >
+<title>_dl_lookup_symbol_x (5,050,505 samples, 3.20%)</title><rect x="71.2" y="565" width="37.7" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="74.16" y="575.5" >_dl..</text>
+</g>
+<g >
+<title>malloc (19,317,413 samples, 12.24%)</title><rect x="638.9" y="421" width="144.4" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="641.91" y="431.5" >malloc</text>
+</g>
+<g >
+<title>dlopen_doit (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="373" width="59.7" height="15.0" fill="rgb(211,31,7)" rx="2" ry="2" />
+<text  x="1012.83" y="383.5" >dlopen..</text>
+</g>
+<g >
+<title>__libc_recvmsg (5,050,505 samples, 3.20%)</title><rect x="896.6" y="517" width="37.7" height="15.0" fill="rgb(220,72,17)" rx="2" ry="2" />
+<text  x="899.57" y="527.5" >__l..</text>
+</g>
+<g >
+<title>asm_exc_page_fault (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="245" width="59.7" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="1012.83" y="255.5" >asm_ex..</text>
+</g>
+<g >
+<title>getifaddrs_internal (5,050,505 samples, 3.20%)</title><rect x="896.6" y="549" width="37.7" height="15.0" fill="rgb(235,140,33)" rx="2" ry="2" />
+<text  x="899.57" y="559.5" >get..</text>
+</g>
+<g >
+<title>path_openat (5,050,505 samples, 3.20%)</title><rect x="783.3" y="325" width="37.8" height="15.0" fill="rgb(249,202,48)" rx="2" ry="2" />
+<text  x="786.31" y="335.5" >pat..</text>
+</g>
+<g >
+<title>getpwuid (5,050,505 samples, 3.20%)</title><rect x="972.1" y="565" width="37.7" height="15.0" fill="rgb(224,87,20)" rx="2" ry="2" />
+<text  x="975.08" y="575.5" >get..</text>
+</g>
+<g >
+<title>bfd_hash_allocate (19,317,413 samples, 12.24%)</title><rect x="638.9" y="453" width="144.4" height="15.0" fill="rgb(228,106,25)" rx="2" ry="2" />
+<text  x="641.91" y="463.5" >bfd_hash_allocate</text>
+</g>
+<g >
+<title>alloc_anon_folio (19,317,413 samples, 12.24%)</title><rect x="638.9" y="277" width="144.4" height="15.0" fill="rgb(223,86,20)" rx="2" ry="2" />
+<text  x="641.91" y="287.5" >alloc_anon_folio</text>
+</g>
+<g >
+<title>_dl_relocate_object (5,050,505 samples, 3.20%)</title><rect x="71.2" y="581" width="37.7" height="15.0" fill="rgb(231,120,28)" rx="2" ry="2" />
+<text  x="74.16" y="591.5" >_dl..</text>
+</g>
+<g >
+<title>sched_clock (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="69" width="62.7" height="15.0" fill="rgb(212,33,7)" rx="2" ry="2" />
+<text  x="1072.54" y="79.5" >sched_..</text>
+</g>
+<g >
+<title>[unknown] (31,669,357 samples, 20.06%)</title><rect x="146.7" y="613" width="236.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="149.66" y="623.5" >[unknown]</text>
+</g>
+<g >
+<title>x64_sys_call (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="341" width="62.7" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="1072.54" y="351.5" >x64_sy..</text>
+</g>
+<g >
+<title>__GI___getifaddrs (5,050,505 samples, 3.20%)</title><rect x="896.6" y="565" width="37.7" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="899.57" y="575.5" >__G..</text>
+</g>
+<g >
+<title>handle_mm_fault (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="197" width="59.7" height="15.0" fill="rgb(234,135,32)" rx="2" ry="2" />
+<text  x="1012.83" y="207.5" >handle..</text>
+</g>
+<g >
+<title>bfd_elf_link_add_symbols (19,317,413 samples, 12.24%)</title><rect x="638.9" y="533" width="144.4" height="15.0" fill="rgb(246,189,45)" rx="2" ry="2" />
+<text  x="641.91" y="543.5" >bfd_elf_link_add_s..</text>
+</g>
+<g >
+<title>[libbfd-2.42-system.so] (19,317,413 samples, 12.24%)</title><rect x="638.9" y="517" width="144.4" height="15.0" fill="rgb(237,147,35)" rx="2" ry="2" />
+<text  x="641.91" y="527.5" >[libbfd-2.42-syste..</text>
+</g>
+<g >
+<title>[x86_64-linux-gnu-ld.bfd] (29,418,423 samples, 18.64%)</title><rect x="638.9" y="581" width="219.9" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="641.91" y="591.5" >[x86_64-linux-gnu-ld.bfd]</text>
+</g>
+<g >
+<title>__fput (8,181,575 samples, 5.18%)</title><rect x="10.0" y="357" width="61.2" height="15.0" fill="rgb(248,200,47)" rx="2" ry="2" />
+<text  x="13.00" y="367.5" >__fput</text>
+</g>
+<g >
+<title>_dl_catch_error (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="405" width="59.7" height="15.0" fill="rgb(223,83,20)" rx="2" ry="2" />
+<text  x="1012.83" y="415.5" >_dl_ca..</text>
+</g>
+<g >
+<title>rtnl_fill_ifinfo.isra.0 (5,050,505 samples, 3.20%)</title><rect x="896.6" y="309" width="37.7" height="15.0" fill="rgb(218,64,15)" rx="2" ry="2" />
+<text  x="899.57" y="319.5" >rtn..</text>
+</g>
+<g >
+<title>_dl_open (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="357" width="59.7" height="15.0" fill="rgb(238,156,37)" rx="2" ry="2" />
+<text  x="1012.83" y="367.5" >_dl_open</text>
+</g>
+<g >
+<title>ext4_do_writepages (8,181,575 samples, 5.18%)</title><rect x="10.0" y="229" width="61.2" height="15.0" fill="rgb(214,42,10)" rx="2" ry="2" />
+<text  x="13.00" y="239.5" >ext4_d..</text>
+</g>
+<g >
+<title>[x86_64-linux-gnu-ld.bfd] (29,418,423 samples, 18.64%)</title><rect x="638.9" y="645" width="219.9" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="641.91" y="655.5" >[x86_64-linux-gnu-ld.bfd]</text>
+</g>
+<g >
+<title>get_combined_adhoc_loc (15,882,502 samples, 10.06%)</title><rect x="383.4" y="613" width="118.7" height="15.0" fill="rgb(218,64,15)" rx="2" ry="2" />
+<text  x="386.39" y="623.5" >get_combined_a..</text>
+</g>
+<g >
+<title>blk_mq_flush_plug_list (8,181,575 samples, 5.18%)</title><rect x="10.0" y="181" width="61.2" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="13.00" y="191.5" >blk_mq..</text>
+</g>
+<g >
+<title>__netlink_request (5,050,505 samples, 3.20%)</title><rect x="896.6" y="533" width="37.7" height="15.0" fill="rgb(213,36,8)" rx="2" ry="2" />
+<text  x="899.57" y="543.5" >__n..</text>
+</g>
+<g >
+<title>memset (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="261" width="59.7" height="15.0" fill="rgb(208,14,3)" rx="2" ry="2" />
+<text  x="1012.83" y="271.5" >memset</text>
+</g>
+<g >
+<title>as (13,232,080 samples, 8.38%)</title><rect x="10.0" y="661" width="98.9" height="15.0" fill="rgb(244,179,42)" rx="2" ry="2" />
+<text  x="13.00" y="671.5" >as</text>
+</g>
+<g >
+<title>__GI___fstatat64 (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="389" width="62.7" height="15.0" fill="rgb(227,101,24)" rx="2" ry="2" />
+<text  x="1072.54" y="399.5" >__GI__..</text>
+</g>
+<g >
+<title>[x86_64-linux-gnu-as] (8,181,575 samples, 5.18%)</title><rect x="10.0" y="549" width="61.2" height="15.0" fill="rgb(249,206,49)" rx="2" ry="2" />
+<text  x="13.00" y="559.5" >[x86_6..</text>
+</g>
+<g >
+<title>__alloc_frozen_pages_noprof (19,317,413 samples, 12.24%)</title><rect x="638.9" y="229" width="144.4" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="641.91" y="239.5" >__alloc_frozen_pag..</text>
+</g>
+<g >
+<title>[pam_unix.so] (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="469" width="62.7" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="1072.54" y="479.5" >[pam_u..</text>
+</g>
+<g >
+<title>task_tick_fair (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="117" width="62.7" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="1072.54" y="127.5" >task_t..</text>
+</g>
+<g >
+<title>dl_open_worker (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="325" width="59.7" height="15.0" fill="rgb(236,145,34)" rx="2" ry="2" />
+<text  x="1012.83" y="335.5" >dl_ope..</text>
+</g>
+<g >
+<title>[cc1plus] (31,669,357 samples, 20.06%)</title><rect x="146.7" y="597" width="236.7" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="149.66" y="607.5" >[cc1plus]</text>
+</g>
+<g >
+<title>[x86_64-linux-gnu-ld.bfd] (29,418,423 samples, 18.64%)</title><rect x="638.9" y="549" width="219.9" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="641.91" y="559.5" >[x86_64-linux-gnu-ld.bfd]</text>
+</g>
+<g >
+<title>getpwnam_r@@GLIBC_2.2.5 (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="437" width="62.7" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="1072.54" y="447.5" >getpwn..</text>
+</g>
+<g >
+<title>__do_fault (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="133" width="59.7" height="15.0" fill="rgb(221,74,17)" rx="2" ry="2" />
+<text  x="1012.83" y="143.5" >__do_f..</text>
+</g>
+<g >
+<title>netlink_recvmsg (5,050,505 samples, 3.20%)</title><rect x="896.6" y="373" width="37.7" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="899.57" y="383.5" >net..</text>
+</g>
+<g >
+<title>_objalloc_alloc (19,317,413 samples, 12.24%)</title><rect x="638.9" y="437" width="144.4" height="15.0" fill="rgb(244,180,43)" rx="2" ry="2" />
+<text  x="641.91" y="447.5" >_objalloc_alloc</text>
+</g>
+<g >
+<title>iommu_map_nosync (8,181,575 samples, 5.18%)</title><rect x="10.0" y="85" width="61.2" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="13.00" y="95.5" >iommu_..</text>
+</g>
+<g >
+<title>do_user_addr_fault (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="213" width="59.7" height="15.0" fill="rgb(228,108,25)" rx="2" ry="2" />
+<text  x="1012.83" y="223.5" >do_use..</text>
+</g>
+<g >
+<title>handle_pte_fault (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="165" width="59.7" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="1012.83" y="175.5" >handle..</text>
+</g>
+<g >
+<title>exc_page_fault (19,317,413 samples, 12.24%)</title><rect x="638.9" y="373" width="144.4" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="641.91" y="383.5" >exc_page_fault</text>
+</g>
+<g >
+<title>asm_sysvec_apic_timer_interrupt (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="245" width="62.7" height="15.0" fill="rgb(232,127,30)" rx="2" ry="2" />
+<text  x="1072.54" y="255.5" >asm_sy..</text>
+</g>
+<g >
+<title>_dl_catch_exception (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="309" width="59.7" height="15.0" fill="rgb(253,223,53)" rx="2" ry="2" />
+<text  x="1012.83" y="319.5" >_dl_ca..</text>
+</g>
+<g >
+<title>[sudoers.so] (24,103,008 samples, 15.27%)</title><rect x="1009.8" y="549" width="180.2" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="1012.83" y="559.5" >[sudoers.so]</text>
+</g>
+<g >
+<title>__blk_flush_plug (8,181,575 samples, 5.18%)</title><rect x="10.0" y="197" width="61.2" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="13.00" y="207.5" >__blk_..</text>
+</g>
+<g >
+<title>pam_modutil_getpwnam (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="453" width="62.7" height="15.0" fill="rgb(232,128,30)" rx="2" ry="2" />
+<text  x="1072.54" y="463.5" >pam_mo..</text>
+</g>
+<g >
+<title>sysvec_apic_timer_interrupt (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="229" width="62.7" height="15.0" fill="rgb(220,69,16)" rx="2" ry="2" />
+<text  x="1072.54" y="239.5" >sysvec..</text>
+</g>
+<g >
+<title>[libpam.so.0.85.1] (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="469" width="59.7" height="15.0" fill="rgb(232,125,30)" rx="2" ry="2" />
+<text  x="1012.83" y="479.5" >[libpa..</text>
+</g>
+<g >
+<title>blk_rq_dma_map_iter_start (8,181,575 samples, 5.18%)</title><rect x="10.0" y="117" width="61.2" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="13.00" y="127.5" >blk_rq..</text>
+</g>
+<g >
+<title>intel_iommu_map_pages (8,181,575 samples, 5.18%)</title><rect x="10.0" y="69" width="61.2" height="15.0" fill="rgb(209,21,5)" rx="2" ry="2" />
+<text  x="13.00" y="79.5" >intel_..</text>
+</g>
+<g >
+<title>hrtimer_interrupt (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="197" width="62.7" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="1072.54" y="207.5" >hrtime..</text>
+</g>
+<g >
+<title>concat (5,050,505 samples, 3.20%)</title><rect x="502.1" y="629" width="37.8" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="505.12" y="639.5" >con..</text>
+</g>
+<g >
+<title>bfd_openw (5,050,505 samples, 3.20%)</title><rect x="783.3" y="533" width="37.8" height="15.0" fill="rgb(239,159,38)" rx="2" ry="2" />
+<text  x="786.31" y="543.5" >bfd..</text>
+</g>
+<g >
+<title>filemap_get_entry (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="85" width="59.7" height="15.0" fill="rgb(246,193,46)" rx="2" ry="2" />
+<text  x="1012.83" y="95.5" >filema..</text>
+</g>
+<g >
+<title>[libpam.so.0.85.1] (16,364,428 samples, 10.37%)</title><rect x="1009.8" y="517" width="122.4" height="15.0" fill="rgb(232,125,30)" rx="2" ry="2" />
+<text  x="1012.83" y="527.5" >[libpam.so.0.85..</text>
+</g>
+<g >
+<title>x64_sys_call (8,181,575 samples, 5.18%)</title><rect x="10.0" y="405" width="61.2" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="13.00" y="415.5" >x64_sy..</text>
+</g>
+<g >
+<title>____sys_recvmsg (5,050,505 samples, 3.20%)</title><rect x="896.6" y="405" width="37.7" height="15.0" fill="rgb(224,90,21)" rx="2" ry="2" />
+<text  x="899.57" y="415.5" >___..</text>
+</g>
+<g >
+<title>[x86_64-linux-gnu-as] (8,181,575 samples, 5.18%)</title><rect x="10.0" y="565" width="61.2" height="15.0" fill="rgb(249,206,49)" rx="2" ry="2" />
+<text  x="13.00" y="575.5" >[x86_6..</text>
+</g>
+<g >
+<title>sched_clock_noinstr (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="53" width="62.7" height="15.0" fill="rgb(253,222,53)" rx="2" ry="2" />
+<text  x="1072.54" y="63.5" >sched_..</text>
+</g>
+<g >
+<title>do_sys_openat2 (5,050,505 samples, 3.20%)</title><rect x="783.3" y="357" width="37.8" height="15.0" fill="rgb(253,221,52)" rx="2" ry="2" />
+<text  x="786.31" y="367.5" >do_..</text>
+</g>
+<g >
+<title>lookup_open.isra.0 (5,050,505 samples, 3.20%)</title><rect x="783.3" y="293" width="37.8" height="15.0" fill="rgb(205,1,0)" rx="2" ry="2" />
+<text  x="786.31" y="303.5" >loo..</text>
+</g>
+<g >
+<title>[libbfd-2.42-system.so] (5,050,505 samples, 3.20%)</title><rect x="783.3" y="517" width="37.8" height="15.0" fill="rgb(237,147,35)" rx="2" ry="2" />
+<text  x="786.31" y="527.5" >[li..</text>
+</g>
+<g >
+<title>do_syscall_64 (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="357" width="62.7" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="1072.54" y="367.5" >do_sys..</text>
+</g>
+<g >
+<title>dl_open_worker_begin (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="293" width="59.7" height="15.0" fill="rgb(233,129,31)" rx="2" ry="2" />
+<text  x="1012.83" y="303.5" >dl_ope..</text>
+</g>
+<g >
+<title>dl_main (5,050,505 samples, 3.20%)</title><rect x="71.2" y="597" width="37.7" height="15.0" fill="rgb(236,145,34)" rx="2" ry="2" />
+<text  x="74.16" y="607.5" >dl_..</text>
+</g>
+<g >
+<title>fopen@@GLIBC_2.2.5 (5,050,505 samples, 3.20%)</title><rect x="783.3" y="485" width="37.8" height="15.0" fill="rgb(247,195,46)" rx="2" ry="2" />
+<text  x="786.31" y="495.5" >fop..</text>
+</g>
+<g >
+<title>[sudoers.so] (5,050,505 samples, 3.20%)</title><rect x="858.8" y="469" width="37.8" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="861.82" y="479.5" >[su..</text>
+</g>
+<g >
+<title>__domain_mapping (8,181,575 samples, 5.18%)</title><rect x="10.0" y="53" width="61.2" height="15.0" fill="rgb(207,13,3)" rx="2" ry="2" />
+<text  x="13.00" y="63.5" >__doma..</text>
+</g>
+<g >
+<title>x64_sys_call (5,050,505 samples, 3.20%)</title><rect x="783.3" y="389" width="37.8" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="786.31" y="399.5" >x64..</text>
+</g>
+<g >
+<title>__libc_start_call_main (44,305,028 samples, 28.07%)</title><rect x="858.8" y="613" width="331.2" height="15.0" fill="rgb(210,26,6)" rx="2" ry="2" />
+<text  x="861.82" y="623.5" >__libc_start_call_main</text>
+</g>
+<g >
+<title>_IO_file_open (5,050,505 samples, 3.20%)</title><rect x="783.3" y="453" width="37.8" height="15.0" fill="rgb(249,205,49)" rx="2" ry="2" />
+<text  x="786.31" y="463.5" >_IO..</text>
+</g>
+<g >
+<title>_dlerror_run (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="421" width="59.7" height="15.0" fill="rgb(210,27,6)" rx="2" ry="2" />
+<text  x="1012.83" y="431.5" >_dlerr..</text>
+</g>
+<g >
+<title>__libc_start_main@@GLIBC_2.34 (8,181,575 samples, 5.18%)</title><rect x="10.0" y="629" width="61.2" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="13.00" y="639.5" >__libc..</text>
+</g>
+<g >
+<title>ext4_create (5,050,505 samples, 3.20%)</title><rect x="783.3" y="277" width="37.8" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="786.31" y="287.5" >ext..</text>
+</g>
+<g >
+<title>[sudoers.so] (5,050,505 samples, 3.20%)</title><rect x="858.8" y="501" width="37.8" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="861.82" y="511.5" >[su..</text>
+</g>
+<g >
+<title>do_syscall_64 (8,181,575 samples, 5.18%)</title><rect x="10.0" y="421" width="61.2" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="13.00" y="431.5" >do_sys..</text>
+</g>
+<g >
+<title>__readlink (5,050,505 samples, 3.20%)</title><rect x="821.1" y="517" width="37.7" height="15.0" fill="rgb(246,192,46)" rx="2" ry="2" />
+<text  x="824.06" y="527.5" >__r..</text>
+</g>
+<g >
+<title>do_user_addr_fault (19,317,413 samples, 12.24%)</title><rect x="638.9" y="357" width="144.4" height="15.0" fill="rgb(228,108,25)" rx="2" ry="2" />
+<text  x="641.91" y="367.5" >do_user_addr_fault</text>
+</g>
+<g >
+<title>__close_nocancel (8,181,575 samples, 5.18%)</title><rect x="10.0" y="453" width="61.2" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="13.00" y="463.5" >__clos..</text>
+</g>
+<g >
+<title>asm_exc_page_fault (15,882,502 samples, 10.06%)</title><rect x="383.4" y="597" width="118.7" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="386.39" y="607.5" >asm_exc_page_f..</text>
+</g>
+<g >
+<title>[libbfd-2.42-system.so] (8,181,575 samples, 5.18%)</title><rect x="10.0" y="485" width="61.2" height="15.0" fill="rgb(237,147,35)" rx="2" ry="2" />
+<text  x="13.00" y="495.5" >[libbf..</text>
+</g>
+<g >
+<title>sched_tick (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="133" width="62.7" height="15.0" fill="rgb(238,155,37)" rx="2" ry="2" />
+<text  x="1072.54" y="143.5" >sched_..</text>
+</g>
+<g >
+<title>do_syscall_64 (5,050,505 samples, 3.20%)</title><rect x="896.6" y="485" width="37.7" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="899.57" y="495.5" >do_..</text>
+</g>
+<g >
+<title>get_page_from_freelist (19,317,413 samples, 12.24%)</title><rect x="638.9" y="213" width="144.4" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="641.91" y="223.5" >get_page_from_free..</text>
+</g>
+<g >
+<title>entry_SYSCALL_64_after_hwframe (8,181,575 samples, 5.18%)</title><rect x="10.0" y="437" width="61.2" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="13.00" y="447.5" >entry_..</text>
+</g>
+<g >
+<title>__x64_sys_close (8,181,575 samples, 5.18%)</title><rect x="10.0" y="389" width="61.2" height="15.0" fill="rgb(231,123,29)" rx="2" ry="2" />
+<text  x="13.00" y="399.5" >__x64_..</text>
+</g>
+<g >
+<title>[sudo] (20,202,020 samples, 12.80%)</title><rect x="858.8" y="581" width="151.0" height="15.0" fill="rgb(213,37,9)" rx="2" ry="2" />
+<text  x="861.82" y="591.5" >[sudo]</text>
+</g>
+<g >
+<title>alloc_pages_mpol (19,317,413 samples, 12.24%)</title><rect x="638.9" y="245" width="144.4" height="15.0" fill="rgb(254,227,54)" rx="2" ry="2" />
+<text  x="641.91" y="255.5" >alloc_pages_mpol</text>
+</g>
+<g >
+<title>__nss_action_parse (5,050,505 samples, 3.20%)</title><rect x="972.1" y="501" width="37.7" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="975.08" y="511.5" >__n..</text>
+</g>
+<g >
+<title>nla_put_64bit (5,050,505 samples, 3.20%)</title><rect x="896.6" y="261" width="37.7" height="15.0" fill="rgb(227,102,24)" rx="2" ry="2" />
+<text  x="899.57" y="271.5" >nla..</text>
+</g>
+<g >
+<title>__nss_passwd_lookup2 (5,050,505 samples, 3.20%)</title><rect x="972.1" y="533" width="37.7" height="15.0" fill="rgb(236,145,34)" rx="2" ry="2" />
+<text  x="975.08" y="543.5" >__n..</text>
+</g>
+<g >
+<title>make_node (8,198,979 samples, 5.19%)</title><rect x="539.9" y="645" width="61.3" height="15.0" fill="rgb(249,204,48)" rx="2" ry="2" />
+<text  x="542.87" y="655.5" >make_n..</text>
+</g>
+<g >
+<title>__filemap_get_folio (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="101" width="59.7" height="15.0" fill="rgb(231,120,28)" rx="2" ry="2" />
+<text  x="1012.83" y="111.5" >__file..</text>
+</g>
+<g >
+<title>__filemap_fdatawrite_range (8,181,575 samples, 5.18%)</title><rect x="10.0" y="293" width="61.2" height="15.0" fill="rgb(233,129,30)" rx="2" ry="2" />
+<text  x="13.00" y="303.5" >__file..</text>
+</g>
+<g >
+<title>dlopen@GLIBC_2.2.5 (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="437" width="59.7" height="15.0" fill="rgb(226,97,23)" rx="2" ry="2" />
+<text  x="1012.83" y="447.5" >dlopen..</text>
+</g>
+<g >
+<title>ext4_writepages (8,181,575 samples, 5.18%)</title><rect x="10.0" y="245" width="61.2" height="15.0" fill="rgb(240,165,39)" rx="2" ry="2" />
+<text  x="13.00" y="255.5" >ext4_w..</text>
+</g>
+<g >
+<title>suppress_warning_at (5,050,505 samples, 3.20%)</title><rect x="601.2" y="645" width="37.7" height="15.0" fill="rgb(243,175,42)" rx="2" ry="2" />
+<text  x="604.16" y="655.5" >sup..</text>
+</g>
+<g >
+<title>fput_close_sync (8,181,575 samples, 5.18%)</title><rect x="10.0" y="373" width="61.2" height="15.0" fill="rgb(224,89,21)" rx="2" ry="2" />
+<text  x="13.00" y="383.5" >fput_c..</text>
+</g>
+<g >
+<title>[libpam.so.0.85.1] (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="485" width="59.7" height="15.0" fill="rgb(232,125,30)" rx="2" ry="2" />
+<text  x="1012.83" y="495.5" >[libpa..</text>
+</g>
+<g >
+<title>bfd_hash_insert (19,317,413 samples, 12.24%)</title><rect x="638.9" y="485" width="144.4" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="641.91" y="495.5" >bfd_hash_insert</text>
+</g>
+<g >
+<title>update_process_times (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="149" width="62.7" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="1072.54" y="159.5" >update..</text>
+</g>
+<g >
+<title>[sudoers.so] (5,050,505 samples, 3.20%)</title><rect x="858.8" y="517" width="37.8" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="861.82" y="527.5" >[su..</text>
+</g>
+<g >
+<title>[sudo] (44,305,028 samples, 28.07%)</title><rect x="858.8" y="645" width="331.2" height="15.0" fill="rgb(213,37,9)" rx="2" ry="2" />
+<text  x="861.82" y="655.5" >[sudo]</text>
+</g>
+<g >
+<title>malloc (5,050,505 samples, 3.20%)</title><rect x="502.1" y="613" width="37.8" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="505.12" y="623.5" >mal..</text>
+</g>
+<g >
+<title>ext4_release_file (8,181,575 samples, 5.18%)</title><rect x="10.0" y="341" width="61.2" height="15.0" fill="rgb(225,92,22)" rx="2" ry="2" />
+<text  x="13.00" y="351.5" >ext4_r..</text>
+</g>
+<g >
+<title>pfn_to_dma_pte (8,181,575 samples, 5.18%)</title><rect x="10.0" y="37" width="61.2" height="15.0" fill="rgb(211,27,6)" rx="2" ry="2" />
+<text  x="13.00" y="47.5" >pfn_to..</text>
+</g>
+<g >
+<title>filemap_fault (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="117" width="59.7" height="15.0" fill="rgb(219,68,16)" rx="2" ry="2" />
+<text  x="1012.83" y="127.5" >filema..</text>
+</g>
+<g >
+<title>[libbfd-2.42-system.so] (8,181,575 samples, 5.18%)</title><rect x="10.0" y="517" width="61.2" height="15.0" fill="rgb(237,147,35)" rx="2" ry="2" />
+<text  x="13.00" y="527.5" >[libbf..</text>
+</g>
+<g >
+<title>ext4_alloc_da_blocks (8,181,575 samples, 5.18%)</title><rect x="10.0" y="325" width="61.2" height="15.0" fill="rgb(237,147,35)" rx="2" ry="2" />
+<text  x="13.00" y="335.5" >ext4_a..</text>
+</g>
+<g >
+<title>do_writepages (8,181,575 samples, 5.18%)</title><rect x="10.0" y="261" width="61.2" height="15.0" fill="rgb(240,164,39)" rx="2" ry="2" />
+<text  x="13.00" y="271.5" >do_wri..</text>
+</g>
+<g >
+<title>blk_finish_plug (8,181,575 samples, 5.18%)</title><rect x="10.0" y="213" width="61.2" height="15.0" fill="rgb(231,119,28)" rx="2" ry="2" />
+<text  x="13.00" y="223.5" >blk_fi..</text>
+</g>
+<g >
+<title>__hrtimer_run_queues (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="181" width="62.7" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
+<text  x="1072.54" y="191.5" >__hrti..</text>
+</g>
+<g >
+<title>[x86_64-linux-gnu-as] (8,181,575 samples, 5.18%)</title><rect x="10.0" y="597" width="61.2" height="15.0" fill="rgb(249,206,49)" rx="2" ry="2" />
+<text  x="13.00" y="607.5" >[x86_6..</text>
+</g>
+<g >
+<title>bfd_close_all_done (8,181,575 samples, 5.18%)</title><rect x="10.0" y="533" width="61.2" height="15.0" fill="rgb(236,146,35)" rx="2" ry="2" />
+<text  x="13.00" y="543.5" >bfd_cl..</text>
+</g>
+<g >
+<title>__pi_memcpy (5,050,505 samples, 3.20%)</title><rect x="896.6" y="245" width="37.7" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="899.57" y="255.5" >__p..</text>
+</g>
+<g >
+<title>netlink_dump (5,050,505 samples, 3.20%)</title><rect x="896.6" y="357" width="37.7" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="899.57" y="367.5" >net..</text>
+</g>
+<g >
+<title>_nl_find_domain (7,738,580 samples, 4.90%)</title><rect x="1132.2" y="517" width="57.8" height="15.0" fill="rgb(237,150,36)" rx="2" ry="2" />
+<text  x="1135.15" y="527.5" >_nl_fi..</text>
+</g>
+<g >
+<title>__libc_start_main@@GLIBC_2.34 (44,305,028 samples, 28.07%)</title><rect x="858.8" y="629" width="331.2" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="861.82" y="639.5" >__libc_start_main@@GLIBC_2.34</text>
+</g>
+<g >
+<title>do_anonymous_page (19,317,413 samples, 12.24%)</title><rect x="638.9" y="293" width="144.4" height="15.0" fill="rgb(238,155,37)" rx="2" ry="2" />
+<text  x="641.91" y="303.5" >do_anonymous_page</text>
+</g>
+<g >
+<title>[sudoers.so] (16,364,428 samples, 10.37%)</title><rect x="1009.8" y="533" width="122.4" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="1012.83" y="543.5" >[sudoers.so]</text>
+</g>
+<g >
+<title>vma_alloc_folio_noprof (19,317,413 samples, 12.24%)</title><rect x="638.9" y="261" width="144.4" height="15.0" fill="rgb(218,61,14)" rx="2" ry="2" />
+<text  x="641.91" y="271.5" >vma_alloc_folio_no..</text>
+</g>
+<g >
+<title>_dl_map_object (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="277" width="59.7" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="1012.83" y="287.5" >_dl_ma..</text>
+</g>
+<g >
+<title>lrealpath (5,050,505 samples, 3.20%)</title><rect x="821.1" y="533" width="37.7" height="15.0" fill="rgb(231,121,29)" rx="2" ry="2" />
+<text  x="824.06" y="543.5" >lre..</text>
+</g>
+<g >
+<title>_dl_catch_exception (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="389" width="59.7" height="15.0" fill="rgb(253,223,53)" rx="2" ry="2" />
+<text  x="1012.83" y="399.5" >_dl_ca..</text>
+</g>
+<g >
+<title>update_load_avg (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="101" width="62.7" height="15.0" fill="rgb(240,165,39)" rx="2" ry="2" />
+<text  x="1072.54" y="111.5" >update..</text>
+</g>
+<g >
+<title>_dl_start (5,050,505 samples, 3.20%)</title><rect x="71.2" y="629" width="37.7" height="15.0" fill="rgb(237,151,36)" rx="2" ry="2" />
+<text  x="74.16" y="639.5" >_dl..</text>
+</g>
+<g >
+<title>kmem_cache_free (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="261" width="62.7" height="15.0" fill="rgb(254,225,53)" rx="2" ry="2" />
+<text  x="1072.54" y="271.5" >kmem_c..</text>
+</g>
+<g >
+<title>__x64_sys_newfstatat (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="325" width="62.7" height="15.0" fill="rgb(246,191,45)" rx="2" ry="2" />
+<text  x="1072.54" y="335.5" >__x64_..</text>
+</g>
+<g >
+<title>lock_vma_under_rcu (15,882,502 samples, 10.06%)</title><rect x="383.4" y="549" width="118.7" height="15.0" fill="rgb(251,211,50)" rx="2" ry="2" />
+<text  x="386.39" y="559.5" >lock_vma_under..</text>
+</g>
+<g >
+<title>[sudo] (5,050,505 samples, 3.20%)</title><rect x="858.8" y="565" width="37.8" height="15.0" fill="rgb(213,37,9)" rx="2" ry="2" />
+<text  x="861.82" y="575.5" >[su..</text>
+</g>
+<g >
+<title>rtnl_dump_ifinfo (5,050,505 samples, 3.20%)</title><rect x="896.6" y="325" width="37.7" height="15.0" fill="rgb(210,26,6)" rx="2" ry="2" />
+<text  x="899.57" y="335.5" >rtn..</text>
+</g>
+<g >
+<title>bfd_cache_close (8,181,575 samples, 5.18%)</title><rect x="10.0" y="501" width="61.2" height="15.0" fill="rgb(218,62,15)" rx="2" ry="2" />
+<text  x="13.00" y="511.5" >bfd_ca..</text>
+</g>
+<g >
+<title>entry_SYSRETQ_unsafe_stack (5,050,505 samples, 3.20%)</title><rect x="821.1" y="501" width="37.7" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="824.06" y="511.5" >ent..</text>
+</g>
+<g >
+<title>gcc::pass_manager::register_dump_files (5,050,505 samples, 3.20%)</title><rect x="108.9" y="597" width="37.8" height="15.0" fill="rgb(248,197,47)" rx="2" ry="2" />
+<text  x="111.91" y="607.5" >gcc..</text>
+</g>
+<g >
+<title>__GI___libc_open (5,050,505 samples, 3.20%)</title><rect x="783.3" y="437" width="37.8" height="15.0" fill="rgb(249,202,48)" rx="2" ry="2" />
+<text  x="786.31" y="447.5" >__G..</text>
+</g>
+<g >
+<title>__dcigettext (7,738,580 samples, 4.90%)</title><rect x="1132.2" y="533" width="57.8" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="1135.15" y="543.5" >__dcig..</text>
+</g>
+<g >
+<title>[unknown] (5,050,505 samples, 3.20%)</title><rect x="108.9" y="629" width="37.8" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="111.91" y="639.5" >[un..</text>
+</g>
+<g >
+<title>entry_SYSCALL_64_after_hwframe (5,050,505 samples, 3.20%)</title><rect x="934.3" y="549" width="37.8" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="937.32" y="559.5" >ent..</text>
+</g>
+<g >
+<title>getpwuid_r@@GLIBC_2.2.5 (5,050,505 samples, 3.20%)</title><rect x="972.1" y="549" width="37.7" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="975.08" y="559.5" >get..</text>
+</g>
+<g >
+<title>open_last_lookups (5,050,505 samples, 3.20%)</title><rect x="783.3" y="309" width="37.8" height="15.0" fill="rgb(220,73,17)" rx="2" ry="2" />
+<text  x="786.31" y="319.5" >ope..</text>
+</g>
+<g >
+<title>_nl_make_l10nflist.localalias (7,738,580 samples, 4.90%)</title><rect x="1132.2" y="501" width="57.8" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="1135.15" y="511.5" >_nl_ma..</text>
+</g>
+<g >
+<title>_dl_start_user (5,050,505 samples, 3.20%)</title><rect x="71.2" y="645" width="37.7" height="15.0" fill="rgb(236,145,34)" rx="2" ry="2" />
+<text  x="74.16" y="655.5" >_dl..</text>
+</g>
+<g >
+<title>x64_sys_call (5,050,505 samples, 3.20%)</title><rect x="934.3" y="517" width="37.8" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="937.32" y="527.5" >x64..</text>
+</g>
+<g >
+<title>bfd_link_hash_lookup (19,317,413 samples, 12.24%)</title><rect x="638.9" y="501" width="144.4" height="15.0" fill="rgb(241,167,39)" rx="2" ry="2" />
+<text  x="641.91" y="511.5" >bfd_link_hash_lookup</text>
+</g>
+<g >
+<title>__handle_mm_fault (19,317,413 samples, 12.24%)</title><rect x="638.9" y="325" width="144.4" height="15.0" fill="rgb(207,9,2)" rx="2" ry="2" />
+<text  x="641.91" y="335.5" >__handle_mm_fault</text>
+</g>
+<g >
+<title>[libbfd-2.42-system.so] (5,050,505 samples, 3.20%)</title><rect x="783.3" y="501" width="37.8" height="15.0" fill="rgb(237,147,35)" rx="2" ry="2" />
+<text  x="786.31" y="511.5" >[li..</text>
+</g>
+<g >
+<title>[unknown] (47,551,859 samples, 30.12%)</title><rect x="146.7" y="629" width="355.4" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="149.66" y="639.5" >[unknown]</text>
+</g>
+<g >
+<title>do_syscall_64 (5,050,505 samples, 3.20%)</title><rect x="934.3" y="533" width="37.8" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="937.32" y="543.5" >do_..</text>
+</g>
+<g >
+<title>handle_mm_fault (19,317,413 samples, 12.24%)</title><rect x="638.9" y="341" width="144.4" height="15.0" fill="rgb(234,135,32)" rx="2" ry="2" />
+<text  x="641.91" y="351.5" >handle_mm_fault</text>
+</g>
+<g >
+<title>do_fault (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="149" width="59.7" height="15.0" fill="rgb(248,200,47)" rx="2" ry="2" />
+<text  x="1012.83" y="159.5" >do_fault</text>
+</g>
+<g >
+<title>native_sched_clock (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="37" width="62.7" height="15.0" fill="rgb(218,64,15)" rx="2" ry="2" />
+<text  x="1072.54" y="47.5" >native..</text>
+</g>
+<g >
+<title>_nl_make_l10nflist.localalias (7,738,580 samples, 4.90%)</title><rect x="1132.2" y="469" width="57.8" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="1135.15" y="479.5" >_nl_ma..</text>
+</g>
+<g >
+<title>rtnl_link_fill (5,050,505 samples, 3.20%)</title><rect x="896.6" y="293" width="37.7" height="15.0" fill="rgb(231,123,29)" rx="2" ry="2" />
+<text  x="899.57" y="303.5" >rtn..</text>
+</g>
+<g >
+<title>__sys_recvmsg (5,050,505 samples, 3.20%)</title><rect x="896.6" y="437" width="37.7" height="15.0" fill="rgb(252,216,51)" rx="2" ry="2" />
+<text  x="899.57" y="447.5" >__s..</text>
+</g>
+<g >
+<title>_nl_make_l10nflist.localalias (7,738,580 samples, 4.90%)</title><rect x="1132.2" y="485" width="57.8" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="1135.15" y="495.5" >_nl_ma..</text>
+</g>
+<g >
+<title>all (157,857,884 samples, 100%)</title><rect x="10.0" y="677" width="1180.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
+<text  x="13.00" y="687.5" ></text>
+</g>
+<g >
+<title>fclose@@GLIBC_2.2.5 (8,181,575 samples, 5.18%)</title><rect x="10.0" y="469" width="61.2" height="15.0" fill="rgb(251,213,51)" rx="2" ry="2" />
+<text  x="13.00" y="479.5" >fclose..</text>
+</g>
+<g >
+<title>asm_exc_page_fault (19,317,413 samples, 12.24%)</title><rect x="638.9" y="389" width="144.4" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="641.91" y="399.5" >asm_exc_page_fault</text>
+</g>
+<g >
+<title>[sudo] (44,305,028 samples, 28.07%)</title><rect x="858.8" y="597" width="331.2" height="15.0" fill="rgb(213,37,9)" rx="2" ry="2" />
+<text  x="861.82" y="607.5" >[sudo]</text>
+</g>
+<g >
+<title>pam_sm_acct_mgmt (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="501" width="62.7" height="15.0" fill="rgb(243,175,42)" rx="2" ry="2" />
+<text  x="1072.54" y="511.5" >pam_sm..</text>
+</g>
+<g >
+<title>entry_SYSCALL_64_after_hwframe (5,050,505 samples, 3.20%)</title><rect x="783.3" y="421" width="37.8" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="786.31" y="431.5" >ent..</text>
+</g>
+<g >
+<title>vfs_fstatat (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="293" width="62.7" height="15.0" fill="rgb(232,127,30)" rx="2" ry="2" />
+<text  x="1072.54" y="303.5" >vfs_fs..</text>
+</g>
+<g >
+<title>cc1plus (70,902,353 samples, 44.92%)</title><rect x="108.9" y="661" width="530.0" height="15.0" fill="rgb(248,198,47)" rx="2" ry="2" />
+<text  x="111.91" y="671.5" >cc1plus</text>
+</g>
+<g >
+<title>mas_walk (15,882,502 samples, 10.06%)</title><rect x="383.4" y="533" width="118.7" height="15.0" fill="rgb(242,170,40)" rx="2" ry="2" />
+<text  x="386.39" y="543.5" >mas_walk</text>
+</g>
+<g >
+<title>__libc_start_call_main (8,181,575 samples, 5.18%)</title><rect x="10.0" y="613" width="61.2" height="15.0" fill="rgb(210,26,6)" rx="2" ry="2" />
+<text  x="13.00" y="623.5" >__libc..</text>
+</g>
+<g >
+<title>exc_page_fault (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="229" width="59.7" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="1012.83" y="239.5" >exc_pa..</text>
+</g>
+<g >
+<title>[sudoers.so] (24,103,008 samples, 15.27%)</title><rect x="1009.8" y="565" width="180.2" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="1012.83" y="575.5" >[sudoers.so]</text>
+</g>
+<g >
+<title>sock_recvmsg (5,050,505 samples, 3.20%)</title><rect x="896.6" y="389" width="37.7" height="15.0" fill="rgb(206,5,1)" rx="2" ry="2" />
+<text  x="899.57" y="399.5" >soc..</text>
+</g>
+<g >
+<title>[cc1plus] (5,050,505 samples, 3.20%)</title><rect x="108.9" y="645" width="37.8" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="111.91" y="655.5" >[cc..</text>
+</g>
+<g >
+<title>nss_database_check_reload_and_get (5,050,505 samples, 3.20%)</title><rect x="972.1" y="517" width="37.7" height="15.0" fill="rgb(224,87,21)" rx="2" ry="2" />
+<text  x="975.08" y="527.5" >nss..</text>
+</g>
+<g >
+<title>__do_sys_newfstatat (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="309" width="62.7" height="15.0" fill="rgb(243,177,42)" rx="2" ry="2" />
+<text  x="1072.54" y="319.5" >__do_s..</text>
+</g>
+<g >
+<title>__nss_passwd_lookup2 (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="421" width="62.7" height="15.0" fill="rgb(236,145,34)" rx="2" ry="2" />
+<text  x="1072.54" y="431.5" >__nss_..</text>
+</g>
+<g >
+<title>blk_mq_dispatch_queue_requests (8,181,575 samples, 5.18%)</title><rect x="10.0" y="165" width="61.2" height="15.0" fill="rgb(216,50,12)" rx="2" ry="2" />
+<text  x="13.00" y="175.5" >blk_mq..</text>
+</g>
+<g >
+<title>do_filp_open (5,050,505 samples, 3.20%)</title><rect x="783.3" y="341" width="37.8" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="786.31" y="351.5" >do_..</text>
+</g>
+<g >
+<title>_dl_catch_exception (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="341" width="59.7" height="15.0" fill="rgb(253,223,53)" rx="2" ry="2" />
+<text  x="1012.83" y="351.5" >_dl_ca..</text>
+</g>
+<g >
+<title>[x86_64-linux-gnu-ld.bfd] (29,418,423 samples, 18.64%)</title><rect x="638.9" y="565" width="219.9" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="641.91" y="575.5" >[x86_64-linux-gnu-ld.bfd]</text>
+</g>
+<g >
+<title>__x64_sys_rt_sigaction (5,050,505 samples, 3.20%)</title><rect x="934.3" y="501" width="37.8" height="15.0" fill="rgb(224,87,20)" rx="2" ry="2" />
+<text  x="937.32" y="511.5" >__x..</text>
+</g>
+<g >
+<title>_int_malloc (19,317,413 samples, 12.24%)</title><rect x="638.9" y="405" width="144.4" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="641.91" y="415.5" >_int_malloc</text>
+</g>
+<g >
+<title>[pam_unix.so] (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="485" width="62.7" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="1072.54" y="495.5" >[pam_u..</text>
+</g>
+<g >
+<title>__sysvec_apic_timer_interrupt (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="213" width="62.7" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="1072.54" y="223.5" >__sysv..</text>
+</g>
+<g >
+<title>dma_iova_link (8,181,575 samples, 5.18%)</title><rect x="10.0" y="101" width="61.2" height="15.0" fill="rgb(247,195,46)" rx="2" ry="2" />
+<text  x="13.00" y="111.5" >dma_io..</text>
+</g>
+<g >
+<title>__x64_sys_recvmsg (5,050,505 samples, 3.20%)</title><rect x="896.6" y="453" width="37.7" height="15.0" fill="rgb(228,107,25)" rx="2" ry="2" />
+<text  x="899.57" y="463.5" >__x..</text>
+</g>
+<g >
+<title>entry_SYSCALL_64_after_hwframe (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="373" width="62.7" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="1072.54" y="383.5" >entry_..</text>
+</g>
+<g >
+<title>ld (29,418,423 samples, 18.64%)</title><rect x="638.9" y="661" width="219.9" height="15.0" fill="rgb(219,68,16)" rx="2" ry="2" />
+<text  x="641.91" y="671.5" >ld</text>
+</g>
+<g >
+<title>sched_clock_cpu (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="85" width="62.7" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="1072.54" y="95.5" >sched_..</text>
+</g>
+<g >
+<title>[x86_64-linux-gnu-as] (8,181,575 samples, 5.18%)</title><rect x="10.0" y="645" width="61.2" height="15.0" fill="rgb(249,206,49)" rx="2" ry="2" />
+<text  x="13.00" y="655.5" >[x86_6..</text>
+</g>
+<g >
+<title>nvme_queue_rqs (8,181,575 samples, 5.18%)</title><rect x="10.0" y="149" width="61.2" height="15.0" fill="rgb(250,211,50)" rx="2" ry="2" />
+<text  x="13.00" y="159.5" >nvme_q..</text>
+</g>
+<g >
+<title>handle_pte_fault (19,317,413 samples, 12.24%)</title><rect x="638.9" y="309" width="144.4" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="641.91" y="319.5" >handle_pte_fault</text>
+</g>
+<g >
+<title>clear_page_erms (19,317,413 samples, 12.24%)</title><rect x="638.9" y="197" width="144.4" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="641.91" y="207.5" >clear_page_erms</text>
+</g>
+<g >
+<title>inode_set_flags (5,050,505 samples, 3.20%)</title><rect x="783.3" y="245" width="37.8" height="15.0" fill="rgb(245,187,44)" rx="2" ry="2" />
+<text  x="786.31" y="255.5" >ino..</text>
+</g>
+<g >
+<title>do_user_addr_fault (15,882,502 samples, 10.06%)</title><rect x="383.4" y="565" width="118.7" height="15.0" fill="rgb(228,108,25)" rx="2" ry="2" />
+<text  x="386.39" y="575.5" >do_user_addr_f..</text>
+</g>
+<g >
+<title>__handle_mm_fault (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="181" width="59.7" height="15.0" fill="rgb(207,9,2)" rx="2" ry="2" />
+<text  x="1012.83" y="191.5" >__hand..</text>
+</g>
+<g >
+<title>xexit (8,181,575 samples, 5.18%)</title><rect x="10.0" y="581" width="61.2" height="15.0" fill="rgb(233,129,30)" rx="2" ry="2" />
+<text  x="13.00" y="591.5" >xexit</text>
+</g>
+<g >
+<title>br_fill_info (5,050,505 samples, 3.20%)</title><rect x="896.6" y="277" width="37.7" height="15.0" fill="rgb(219,65,15)" rx="2" ry="2" />
+<text  x="899.57" y="287.5" >br_..</text>
+</g>
+<g >
+<title>_dl_sysdep_start (5,050,505 samples, 3.20%)</title><rect x="71.2" y="613" width="37.7" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="74.16" y="623.5" >_dl..</text>
+</g>
+<g >
+<title>putname (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="277" width="62.7" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="1072.54" y="287.5" >putname</text>
+</g>
+<g >
+<title>_IO_file_fopen@@GLIBC_2.2.5 (5,050,505 samples, 3.20%)</title><rect x="783.3" y="469" width="37.8" height="15.0" fill="rgb(237,148,35)" rx="2" ry="2" />
+<text  x="786.31" y="479.5" >_IO..</text>
+</g>
+<g >
+<title>_bfd_x86_elf_link_hash_newfunc (19,317,413 samples, 12.24%)</title><rect x="638.9" y="469" width="144.4" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="641.91" y="479.5" >_bfd_x86_elf_link_..</text>
+</g>
+<g >
+<title>do_syscall_64 (5,050,505 samples, 3.20%)</title><rect x="783.3" y="405" width="37.8" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="786.31" y="415.5" >do_..</text>
+</g>
+<g >
+<title>[sudo] (5,050,505 samples, 3.20%)</title><rect x="858.8" y="549" width="37.8" height="15.0" fill="rgb(213,37,9)" rx="2" ry="2" />
+<text  x="861.82" y="559.5" >[su..</text>
+</g>
+<g >
+<title>rtnl_dumpit (5,050,505 samples, 3.20%)</title><rect x="896.6" y="341" width="37.7" height="15.0" fill="rgb(248,201,48)" rx="2" ry="2" />
+<text  x="899.57" y="351.5" >rtn..</text>
+</g>
+<g >
+<title>entry_SYSCALL_64_after_hwframe (5,050,505 samples, 3.20%)</title><rect x="896.6" y="501" width="37.7" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="899.57" y="511.5" >ent..</text>
+</g>
+<g >
+<title>[libpam.so.0.85.1] (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="453" width="59.7" height="15.0" fill="rgb(232,125,30)" rx="2" ry="2" />
+<text  x="1012.83" y="463.5" >[libpa..</text>
+</g>
+<g >
+<title>nss_database_check_reload_and_get (8,375,934 samples, 5.31%)</title><rect x="1069.5" y="405" width="62.7" height="15.0" fill="rgb(224,87,21)" rx="2" ry="2" />
+<text  x="1072.54" y="415.5" >nss_da..</text>
+</g>
+<g >
+<title>__libc_start_call_main (29,418,423 samples, 18.64%)</title><rect x="638.9" y="613" width="219.9" height="15.0" fill="rgb(210,26,6)" rx="2" ry="2" />
+<text  x="641.91" y="623.5" >__libc_start_call_main</text>
+</g>
+<g >
+<title>[sudoers.so] (24,103,008 samples, 15.27%)</title><rect x="1009.8" y="581" width="180.2" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="1012.83" y="591.5" >[sudoers.so]</text>
+</g>
+<g >
+<title>__strcmp_avx2 (7,738,580 samples, 4.90%)</title><rect x="1132.2" y="453" width="57.8" height="15.0" fill="rgb(239,159,38)" rx="2" ry="2" />
+<text  x="1135.15" y="463.5" >__strc..</text>
+</g>
+<g >
+<title>__libc_sigaction (5,050,505 samples, 3.20%)</title><rect x="934.3" y="565" width="37.8" height="15.0" fill="rgb(215,50,12)" rx="2" ry="2" />
+<text  x="937.32" y="575.5" >__l..</text>
+</g>
+<g >
+<title>__ext4_new_inode (5,050,505 samples, 3.20%)</title><rect x="783.3" y="261" width="37.8" height="15.0" fill="rgb(209,21,5)" rx="2" ry="2" />
+<text  x="786.31" y="271.5" >__e..</text>
+</g>
+<g >
+<title>nvme_prep_rq (8,181,575 samples, 5.18%)</title><rect x="10.0" y="133" width="61.2" height="15.0" fill="rgb(254,227,54)" rx="2" ry="2" />
+<text  x="13.00" y="143.5" >nvme_p..</text>
+</g>
+<g >
+<title>[sudoers.so] (5,050,505 samples, 3.20%)</title><rect x="858.8" y="533" width="37.8" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="861.82" y="543.5" >[su..</text>
+</g>
+<g >
+<title>x64_sys_call (5,050,505 samples, 3.20%)</title><rect x="896.6" y="469" width="37.7" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="899.57" y="479.5" >x64..</text>
+</g>
+<g >
+<title>sudo (44,305,028 samples, 28.07%)</title><rect x="858.8" y="661" width="331.2" height="15.0" fill="rgb(251,215,51)" rx="2" ry="2" />
+<text  x="861.82" y="671.5" >sudo</text>
+</g>
+<g >
+<title>[unknown] (5,050,505 samples, 3.20%)</title><rect x="108.9" y="613" width="37.8" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="111.91" y="623.5" >[un..</text>
+</g>
+<g >
+<title>[unknown] (52,602,364 samples, 33.32%)</title><rect x="146.7" y="645" width="393.2" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="149.66" y="655.5" >[unknown]</text>
+</g>
+<g >
+<title>filemap_flush (8,181,575 samples, 5.18%)</title><rect x="10.0" y="309" width="61.2" height="15.0" fill="rgb(231,120,28)" rx="2" ry="2" />
+<text  x="13.00" y="319.5" >filema..</text>
+</g>
+<g >
+<title>exc_page_fault (15,882,502 samples, 10.06%)</title><rect x="383.4" y="581" width="118.7" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="386.39" y="591.5" >exc_page_fault</text>
+</g>
+<g >
+<title>[sudoers.so] (5,050,505 samples, 3.20%)</title><rect x="858.8" y="485" width="37.8" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="861.82" y="495.5" >[su..</text>
+</g>
+<g >
+<title>__x64_sys_openat (5,050,505 samples, 3.20%)</title><rect x="783.3" y="373" width="37.8" height="15.0" fill="rgb(251,215,51)" rx="2" ry="2" />
+<text  x="786.31" y="383.5" >__x..</text>
+</g>
+<g >
+<title>[x86_64-linux-gnu-ld.bfd] (29,418,423 samples, 18.64%)</title><rect x="638.9" y="597" width="219.9" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="641.91" y="607.5" >[x86_64-linux-gnu-ld.bfd]</text>
+</g>
+<g >
+<title>[libpam.so.0.85.1] (7,988,494 samples, 5.06%)</title><rect x="1009.8" y="501" width="59.7" height="15.0" fill="rgb(232,125,30)" rx="2" ry="2" />
+<text  x="1012.83" y="511.5" >[libpa..</text>
+</g>
+<g >
+<title>__libc_start_main@@GLIBC_2.34 (29,418,423 samples, 18.64%)</title><rect x="638.9" y="629" width="219.9" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="641.91" y="639.5" >__libc_start_main@@GLIBC_2.34</text>
+</g>
+</g>
+</svg>
