@@ -1,0 +1,66 @@
+ Performance counter stats for './run_pipe_bench.sh':
+
+         1,353,257      cpu_atom/L1-dcache-loads/                                               (77.03%)
+         2,224,017      cpu_core/L1-dcache-loads/                                               (22.97%)
+   <not supported>      cpu_atom/L1-dcache-load-misses/                                       
+            86,607      cpu_core/L1-dcache-load-misses/  #    3.89% of all L1-dcache accesses   (22.97%)
+            11,182      cpu_atom/LLC-loads/                                                     (77.03%)
+            47,051      cpu_core/LLC-loads/                                                     (22.97%)
+               617      cpu_atom/LLC-load-misses/        #    5.52% of all LL-cache accesses    (77.03%)
+            18,933      cpu_core/LLC-load-misses/        #   40.24% of all LL-cache accesses    (22.97%)
+
+      21.856471674 seconds time elapsed
+
+       0.690304000 seconds user
+       0.109977000 seconds sys
+
+
+Performance counter stats for './run_socket_bench.sh':
+
+         1,645,613      cpu_atom/L1-dcache-loads/                                               (78.79%)
+           590,136      cpu_core/L1-dcache-loads/                                               (21.21%)
+   <not supported>      cpu_atom/L1-dcache-load-misses/                                       
+            25,081      cpu_core/L1-dcache-load-misses/  #    4.25% of all L1-dcache accesses   (21.21%)
+            13,501      cpu_atom/LLC-loads/                                                     (78.79%)
+            15,508      cpu_core/LLC-loads/                                                     (21.21%)
+               403      cpu_atom/LLC-load-misses/        #    2.98% of all LL-cache accesses    (78.79%)
+             8,728      cpu_core/LLC-load-misses/        #   56.28% of all LL-cache accesses    (21.21%)
+
+     483.561221666 seconds time elapsed
+
+     121.757821000 seconds user
+     700.135556000 seconds sys
+
+ Performance counter stats for './run_mq_bench.sh':
+
+         1,329,826      cpu_atom/L1-dcache-loads/                                             
+     <not counted>      cpu_core/L1-dcache-loads/                                               (0.00%)
+   <not supported>      cpu_atom/L1-dcache-load-misses/                                       
+     <not counted>      cpu_core/L1-dcache-load-misses/                                         (0.00%)
+            12,512      cpu_atom/LLC-loads/                                                   
+     <not counted>      cpu_core/LLC-loads/                                                     (0.00%)
+               401      cpu_atom/LLC-load-misses/        #    3.20% of all LL-cache accesses  
+     <not counted>      cpu_core/LLC-load-misses/                                               (0.00%)
+
+      14.520513805 seconds time elapsed
+
+       3.162047000 seconds user
+      20.516571000 seconds sys
+
+
+ Performance counter stats for './run_uring_bench.sh':
+
+         1,423,783      cpu_atom/L1-dcache-loads/                                               (52.39%)
+         1,440,771      cpu_core/L1-dcache-loads/                                               (47.61%)
+   <not supported>      cpu_atom/L1-dcache-load-misses/                                       
+            48,720      cpu_core/L1-dcache-load-misses/  #    3.38% of all L1-dcache accesses   (47.61%)
+            11,896      cpu_atom/LLC-loads/                                                     (52.39%)
+            26,848      cpu_core/LLC-loads/                                                     (47.61%)
+               986      cpu_atom/LLC-load-misses/        #    8.29% of all LL-cache accesses    (52.39%)
+            11,168      cpu_core/LLC-load-misses/        #   41.60% of all LL-cache accesses    (47.61%)
+
+      79.092087425 seconds time elapsed
+
+       1.246085000 seconds user
+       0.190023000 seconds sys
+
