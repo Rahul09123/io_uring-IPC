@@ -107,18 +107,23 @@ def setup_plot_style() -> None:
     plt.style.use("seaborn-v0_8-whitegrid")
     plt.rcParams.update(
         {
-            "figure.dpi": 170,
-            "savefig.dpi": 260,
-            "font.size": 11,
-            "axes.titlesize": 15,
-            "axes.labelsize": 12,
-            "legend.fontsize": 10,
-            "axes.titleweight": "semibold",
-            "axes.labelweight": "medium",
+            "figure.dpi": 200,
+            "savefig.dpi": 300,
+            "font.family": "serif",
+            "font.serif": ["Times New Roman", "DejaVu Serif", "Liberation Serif", "serif"],
+            "font.size": 10,
+            "axes.titlesize": 13,
+            "axes.labelsize": 11,
+            "legend.fontsize": 9,
+            "axes.titleweight": "bold",
+            "axes.labelweight": "normal",
             "axes.spines.top": False,
             "axes.spines.right": False,
             "axes.grid": True,
-            "grid.alpha": 0.22,
+            "grid.alpha": 0.25,
+            "grid.linestyle": ":",
+            "axes.edgecolor": "#111111",
+            "axes.linewidth": 0.8,
         }
     )
 
@@ -130,8 +135,23 @@ def format_size_ticks(ax: plt.Axes) -> None:
 
 
 def format_research_axis(ax: plt.Axes) -> None:
-    ax.tick_params(axis="both", which="major", length=0)
+    ax.tick_params(axis="both", which="major", length=4, width=0.8, direction="out")
     ax.margins(x=0.02)
+
+
+LINE_STYLES = {
+    "pipe": "-.",      # dash-dot
+    "socket": "--",    # dashed
+    "mq": ":",         # dotted
+    "uring": "-",      # solid
+}
+
+MARKERS = {
+    "pipe": "^",       # triangle
+    "socket": "s",     # square
+    "mq": "d",         # diamond
+    "uring": "o",      # circle
+}
 
 
 def plot_metric_comparison(
@@ -145,41 +165,44 @@ def plot_metric_comparison(
     show_iqr: bool = False,
     show_mean: bool = False,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots(figsize=(7.5, 4.2))
 
     for benchmark in BENCHMARKS:
         rows = benchmark_data[benchmark.key]
         grouped = group_by_size(rows, metric)
         sizes, medians, q1_values, q3_values, means = summarize_grouped_distribution(grouped)
+        
         ax.plot(
             sizes,
             medians,
-            marker="o",
-            linewidth=2.5,
+            marker=MARKERS[benchmark.key],
+            linestyle=LINE_STYLES[benchmark.key],
+            linewidth=1.8,
+            markersize=5,
             color=benchmark.color,
             label=benchmark.label,
         )
         if show_iqr:
-            ax.fill_between(sizes, q1_values, q3_values, color=benchmark.color, alpha=0.15)
+            ax.fill_between(sizes, q1_values, q3_values, color=benchmark.color, alpha=0.12)
         if show_mean:
             ax.plot(
                 sizes,
                 means,
-                linestyle="--",
-                linewidth=1.2,
+                linestyle=":",
+                linewidth=1.0,
                 color=benchmark.color,
-                alpha=0.6,
+                alpha=0.5,
             )
 
     format_size_ticks(ax)
-    ax.set_xlabel("Message size (bytes)")
+    ax.set_xlabel("Message Size (Bytes)")
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.legend(loc="best", frameon=True)
+    ax.legend(loc="best", frameon=True, fancybox=False, edgecolor="#cccccc")
     ax.set_yscale(yscale)
     format_research_axis(ax)
     fig.tight_layout()
-    fig.savefig(output_path)
+    fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
 
@@ -187,13 +210,11 @@ def plot_speedup_vs_uring(
     benchmark_data: Dict[str, List[dict]],
     output_path: Path,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots(figsize=(7.5, 4.2))
 
     uring_grouped = group_by_size(benchmark_data["uring"], "throughput_gbps")
     sizes, uring_median, _, _, _ = summarize_grouped_distribution(uring_grouped)
     size_to_uring = dict(zip(sizes, uring_median))
-
-    baselines = [benchmark for benchmark in BENCHMARKS if benchmark.key != "uring"]
 
     for benchmark in BENCHMARKS:
         if benchmark.key == "uring":
@@ -201,23 +222,26 @@ def plot_speedup_vs_uring(
         grouped = group_by_size(benchmark_data[benchmark.key], "throughput_gbps")
         bench_sizes, bench_medians, _, _, _ = summarize_grouped_distribution(grouped)
         speedups = [size_to_uring[size] / baseline if baseline else 0.0 for size, baseline in zip(bench_sizes, bench_medians)]
+        
         ax.plot(
             bench_sizes,
             speedups,
-            marker="o",
-            linewidth=2.4,
+            marker=MARKERS[benchmark.key],
+            linestyle=LINE_STYLES[benchmark.key],
+            linewidth=1.8,
+            markersize=5,
             color=benchmark.color,
             label=f"io_uring vs {benchmark.label}",
         )
 
-    ax.axhline(1.0, color="#444444", linestyle="--", linewidth=1.0, alpha=0.7)
+    ax.axhline(1.0, color="#444444", linestyle="--", linewidth=0.8, alpha=0.7)
     format_size_ticks(ax)
-    ax.set_xlabel("Message size (bytes)")
-    ax.set_ylabel("Throughput ratio (io_uring / baseline)")
-    ax.set_title("Throughput advantage of io_uring over each baseline")
+    ax.set_xlabel("Message Size (Bytes)")
+    ax.set_ylabel("Throughput Ratio (io_uring / Baseline)")
+    ax.set_title("Throughput Advantage of io_uring over Each Baseline")
     ax.set_yscale("linear")
     ax.set_ylim(0, None)
-    ax.legend(loc="best", frameon=True)
+    ax.legend(loc="best", frameon=True, fancybox=False, edgecolor="#cccccc")
     format_research_axis(ax)
     fig.tight_layout()
     fig.savefig(output_path)
@@ -326,28 +350,37 @@ def plot_cache_misses(summaries: List[dict], output_path: Path, summary_csv: Pat
     l1_values = [aligned[key]["l1_miss_rate"] for key in order]
     llc_values = [aligned[key]["llc_miss_rate"] for key in order]
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5.4), sharex=True)
+    fig, axes = plt.subplots(1, 2, figsize=(8.5, 4.0), sharex=True)
     bar_positions = list(range(len(order)))
     labels = [next(item.label for item in BENCHMARKS if item.key == key) for key in order]
     colors = [next(item.color for item in BENCHMARKS if item.key == key) for key in order]
+    
+    # Custom hatches for black-and-white readability
+    hatches = ["//", "\\\\", "||", "++"]
 
-    axes[0].bar(bar_positions, l1_values, color=colors)
-    axes[0].set_title("L1 data-cache miss rate")
-    axes[0].set_ylabel("Miss rate")
+    bars0 = axes[0].bar(bar_positions, l1_values, color=colors, edgecolor="#111111", linewidth=0.8)
+    for bar, hatch in zip(bars0, hatches):
+        bar.set_hatch(hatch)
+    axes[0].set_title("L1 Data Cache Miss Rate")
+    axes[0].set_ylabel("Miss Rate (%)")
     axes[0].set_ylim(0, max(l1_values) * 1.25 if l1_values else 1.0)
-    axes[0].set_xticks(bar_positions, labels, rotation=18, ha="right")
-    axes[0].yaxis.set_major_formatter(lambda value, _: f"{value:.1%}")
+    axes[0].set_xticks(bar_positions, labels, rotation=15, ha="right")
+    axes[0].yaxis.set_major_formatter(lambda value, _: f"{value * 100:.1f}%")
+    axes[0].tick_params(axis="both", which="major", length=4, width=0.8, direction="out")
 
-    axes[1].bar(bar_positions, llc_values, color=colors)
-    axes[1].set_title("Last-level-cache miss rate")
-    axes[1].set_ylabel("Miss rate")
+    bars1 = axes[1].bar(bar_positions, llc_values, color=colors, edgecolor="#111111", linewidth=0.8)
+    for bar, hatch in zip(bars1, hatches):
+        bar.set_hatch(hatch)
+    axes[1].set_title("Last Level Cache (LLC) Miss Rate")
+    axes[1].set_ylabel("Miss Rate (%)")
     axes[1].set_ylim(0, max(llc_values) * 1.25 if llc_values else 1.0)
-    axes[1].set_xticks(bar_positions, labels, rotation=18, ha="right")
-    axes[1].yaxis.set_major_formatter(lambda value, _: f"{value:.1%}")
+    axes[1].set_xticks(bar_positions, labels, rotation=15, ha="right")
+    axes[1].yaxis.set_major_formatter(lambda value, _: f"{value * 100:.2f}%")
+    axes[1].tick_params(axis="both", which="major", length=4, width=0.8, direction="out")
 
-    fig.suptitle("Normalized cache behavior across IPC implementations")
+    fig.suptitle("Hardware Cache Miss Rates Comparison", fontweight="bold", fontsize=12)
     fig.tight_layout()
-    fig.savefig(output_path)
+    fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
 

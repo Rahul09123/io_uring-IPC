@@ -195,3 +195,66 @@ bash run_pipe_bench.sh
 - `MAX_LAT_SAMPLES = 4*1024*1024`
 - `PIPE_FIFO_PATH = /tmp/ipc_pipe_bench`
 - `SHM_TEL_NAME = /ipc_pipe_telemetry`
+
+## 11. Detailed Code Walkthrough
+
+This section provides a detailed walk-through of the codebase components for the POSIX Pipe benchmark.
+
+### 11.1 `common.h`
+The shared header defines the contract between the producer and consumer:
+- **Core Affinity Constants (`PRODUCER_CORE` and `CONSUMER_CORE`)**: Set to 1 and 2 respectively. This forces the OS scheduler to execute the producer and consumer on separate physical cores, eliminating execution-preemption noise and keeping context switching clean.
+- **Message Size Configuration (`MESSAGE_SIZES`)**: Controls the payload size sweep matrix, ranging from small control messages (64 bytes) to large bulk messages (1 MiB).
+- **`MessageHeader` Structure**: Prefixes every message sent over the pipe.
+  - `send_ns`: A 64-bit integer timestamp captured by the producer immediately before writing to the pipe.
+  - `payload_size`: A 32-bit integer indicating the size of the payload following this header.
+- **`Telemetry` Structure**: Holds the metrics block shared via POSIX shared memory (`SHM_TEL_NAME`).
+  - `latencies`: An array of double-precision elements storing individual latency values in microseconds.
+  - `latency_count`: Total count of recorded latencies in the current run.
+  - `execution_time_sec`: Real time duration of the run.
+
+### 11.2 `pipe_producer.cpp`
+The producer is responsible for streaming data into the pipe:
+- **`set_affinity(int core_id)`**: Sets the calling process's CPU affinity using the standard Linux `sched_setaffinity` system call. It guarantees the producer remains on Core 1.
+- **`now_ns()`**: Reads the high-precision system clock (`std::chrono::high_resolution_clock`) and returns the duration since epoch in nanoseconds.
+- **`write_all(int fd, const void* buf, size_t n)`**: Since write operations on pipes can perform partial writes (returning fewer bytes than requested if the pipe buffer is full), this function executes a loop to write the entire block, advancing the buffer pointer and reducing the remaining count until completion.
+- **`get_total_bytes(size_t msg_sz)`**: Determines how much data to send per message size class. Small messages use smaller total transfers (e.g., 32 MiB) to avoid excessively long test runs, whereas larger message sizes scale up to 2 GiB to stress the memory pipeline.
+- **`main()` Loop**:
+  1. Pin process affinity to Core 1.
+  2. For each message size:
+     - Create the unique path: `/tmp/ipc_pipe_bench_<sz>`.
+     - Allocate a contiguous `wire` buffer of size `sizeof(MessageHeader) + sz`.
+     - Set the payload size in the header structure.
+     - Open the write end of the FIFO (`open(dynamic_fifo, O_WRONLY)`). This call blocks until the consumer has opened the read end, acting as an implicit synchronization boundary.
+     - Invoke `fcntl(fd, F_SETPIPE_SZ, MAX_PAYLOAD)` to increase the capacity of the kernel pipe buffer to 1 MiB (improving write efficiency for large messages).
+     - Run `NUM_RUNS + 1` loops (warmup + 5 measured runs).
+     - Inside each run loop, capture `now_ns()`, write the frame to the FIFO using `write_all`, increment `produced` counter, and call `sched_yield()` to let the OS schedule the consumer.
+     - Close the FIFO descriptor and pause for 5 milliseconds to let the consumer settle.
+
+### 11.3 `pipe_consumer.cpp`
+The consumer receives the data stream, validates it, and generates the final metrics:
+- **`read_all(int fd, void* buf, size_t n)`**: Similar to `write_all`, this function loops to read the exact number of bytes requested, avoiding partial read truncation.
+- **`compute_stats(Telemetry* tel, size_t msg_sz)`**:
+  - Copies latencies from telemetry shared memory into a local vector.
+  - Excludes negative latencies.
+  - Sorts the vector to compute statistical percentiles (`p50`, `p95`, `p99`).
+  - Sums the elements to calculate the average and derives the standard deviation.
+  - Calculates throughput as `Total Bytes / 1,073,741,824 / execution_time_sec` (yielding GiB/s).
+- **`main()` Loop**:
+  1. Pin process affinity to Core 2.
+  2. Setup POSIX shared memory via `shm_open`, `ftruncate`, and `mmap` to store `Telemetry`.
+  3. Open `pipe_results.csv` and write the headers.
+  4. For each message size:
+     - Formulate the FIFO name, delete any stale nodes with `unlink()`, and create a new FIFO using `mkfifo(..., 0666)`.
+     - Open the FIFO for reading (`open(..., O_RDONLY)`).
+     - For each run (0 to 5):
+       - Reset `Telemetry` to zero.
+       - Read the header and then read the payload block into `payload_buf`.
+       - Record `recv_ns` immediately upon receipt.
+       - Touch the payload at every 64 bytes (the hardware cache line boundary) to ensure that the CPU physically reads the memory and doesn't optimize it away.
+       - Compute the message latency in microseconds: `(recv_ns - hdr.send_ns) / 1000.0`.
+       - If space permits, store the latency in the `Telemetry` array.
+       - Accumulate total bytes received until the target payload volume is reached.
+       - Compute execution time and trigger `compute_stats()`.
+       - Write statistics for runs 1 to 5 to `pipe_results.csv` (ignoring run 0 warmup).
+     - Close the FIFO read descriptor and remove the path with `unlink()`.
+  5. Close CSV, munmap telemetry, and unlink telemetry shm.

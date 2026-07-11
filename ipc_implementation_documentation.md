@@ -29,8 +29,11 @@ The benchmark code also follows a simple measurement discipline:
 1. Pin producer and consumer to separate cores.
 2. Run one warmup iteration before the measured runs.
 3. Sweep all message sizes for the current transport.
-4. Record throughput and latency statistics in CSV output.
-5. Generate flamegraphs and cache-miss summaries for the accompanying analysis.
+4. Scale workload volumes depending on the IPC mechanism:
+   - **POSIX Pipes & POSIX Message Queues**: Dynamically scaled (32 MB for messages $\le 1$ KiB, 256 MB for $\le 64$ KiB, and 2 GB for larger messages) to optimize execution times.
+   - **UNIX Domain Sockets & `io_uring` Shared Ring**: Static 2 GB workload across all message sizes.
+5. Record throughput and latency statistics in CSV output.
+6. Generate flamegraphs and cache-miss summaries for the accompanying analysis.
 
 ## POSIX Pipe Implementation
 
