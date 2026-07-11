@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>io_uring-IPC Flamegraph Gallery</title>
+<style>
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:32px;background:#f7f7fb;color:#172033;}
+h1{margin-top:0;}
+.card{background:#fff;border:1px solid #d9dbe7;border-radius:14px;padding:18px;margin:18px 0;box-shadow:0 10px 28px rgba(18,24,40,.06);}
+object{width:100%;height:820px;border:1px solid #eef0f6;border-radius:10px;background:#fff;}
+p{line-height:1.55;}
+code{background:#eef2ff;padding:2px 5px;border-radius:4px;}
+</style>
+</head>
+<body>
+<h1>io_uring-IPC Flamegraph Gallery</h1>
+<p>Each SVG below is the flamegraph captured for one IPC benchmark family.</p>
+<section class="card">
+<h2>Mq Flamegraph</h2>
+<object data="mq_flamegraph.svg" type="image/svg+xml"></object>
+</section>
+<section class="card">
+<h2>Pipe Flamegraph</h2>
+<object data="pipe_flamegraph.svg" type="image/svg+xml"></object>
+</section>
+<section class="card">
+<h2>Socket Flamegraph</h2>
+<object data="socket_flamegraph.svg" type="image/svg+xml"></object>
+</section>
+<section class="card">
+<h2>Uring Flamegraph</h2>
+<object data="uring_flamegraph.svg" type="image/svg+xml"></object>
+</section>
+</body>
+</html>
