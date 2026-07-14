@@ -385,15 +385,15 @@ def plot_cache_misses(summaries: List[dict], output_path: Path, summary_csv: Pat
 
 
 def build_flamegraph_gallery(root: Path, output_dir: Path) -> Path:
-    flamegraph_src = root / "FlameGraphs"
     gallery_dir = output_dir / "flamegraphs"
     gallery_dir.mkdir(parents=True, exist_ok=True)
 
-    copied: List[Path] = []
-    for svg_file in sorted(flamegraph_src.glob("*_flamegraph.svg")):
-        target = gallery_dir / svg_file.name
-        shutil.copy2(svg_file, target)
-        copied.append(target)
+    # Scan the gallery directory directly for visual assets
+    assets: List[Path] = []
+    for suffix in ["*_flamegraph.svg", "*.jpg", "*.jpeg"]:
+        for file in sorted(gallery_dir.glob(suffix)):
+            if file.name != "index.html":
+                assets.append(file)
 
     html_path = gallery_dir / "index.html"
     html_parts = [
@@ -407,26 +407,36 @@ def build_flamegraph_gallery(root: Path, output_dir: Path) -> Path:
         "body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:32px;background:#f7f7fb;color:#172033;}",
         "h1{margin-top:0;}",
         ".card{background:#fff;border:1px solid #d9dbe7;border-radius:14px;padding:18px;margin:18px 0;box-shadow:0 10px 28px rgba(18,24,40,.06);}",
-        "object{width:100%;height:820px;border:1px solid #eef0f6;border-radius:10px;background:#fff;}",
+        "object, img{width:100%;height:820px;border:1px solid #eef0f6;border-radius:10px;background:#fff;object-fit:contain;}",
         "p{line-height:1.55;}",
         "code{background:#eef2ff;padding:2px 5px;border-radius:4px;}",
         "</style>",
         "</head>",
         "<body>",
         "<h1>io_uring-IPC Flamegraph Gallery</h1>",
-        "<p>Each SVG below is the flamegraph captured for one IPC benchmark family.</p>",
+        "<p>The flamegraphs below show CPU execution profiles captured for the IPC benchmark families.</p>",
     ]
 
-    for svg_path in copied:
-        title = svg_path.stem.replace("_", " ").title()
-        html_parts.extend(
-            [
-                "<section class=\"card\">",
-                f"<h2>{title}</h2>",
-                f"<object data=\"{svg_path.name}\" type=\"image/svg+xml\"></object>",
-                "</section>",
-            ]
-        )
+    for path in assets:
+        title = path.stem.replace("_", " ").title()
+        if path.suffix.lower() == ".svg":
+            html_parts.extend(
+                [
+                    "<section class=\"card\">",
+                    f"<h2>{title}</h2>",
+                    f"<object data=\"{path.name}\" type=\"image/svg+xml\"></object>",
+                    "</section>",
+                ]
+            )
+        else:
+            html_parts.extend(
+                [
+                    "<section class=\"card\">",
+                    f"<h2>{title}</h2>",
+                    f"<img src=\"{path.name}\" alt=\"{title}\" />",
+                    "</section>",
+                ]
+            )
 
     html_parts.extend(["</body>", "</html>"])
     html_path.write_text("\n".join(html_parts), encoding="utf-8")
@@ -464,7 +474,7 @@ def main() -> int:
 
     benchmark_data: Dict[str, List[dict]] = {}
     for benchmark in BENCHMARKS:
-        csv_path = root / benchmark.csv_name
+        csv_path = root / "data" / benchmark.csv_name
         if not csv_path.exists():
             raise FileNotFoundError(f"Missing benchmark CSV: {csv_path}")
         benchmark_data[benchmark.key] = load_csv_rows(csv_path)
@@ -488,7 +498,7 @@ def main() -> int:
     )
     plot_speedup_vs_uring(benchmark_data, output_dir / "speedup.png")
 
-    cache_miss_file = root / "Cache Misses"
+    cache_miss_file = root / "data" / "Cache Misses"
     if cache_miss_file.exists():
         cache_summaries = load_cache_miss_summary(cache_miss_file)
         plot_cache_misses(cache_summaries, output_dir / "cache_misses.png", output_dir / "cache_misses_summary.csv")

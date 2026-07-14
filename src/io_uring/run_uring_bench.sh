@@ -3,7 +3,7 @@ set -e
 
 # 1. Compile targets cleanly
 g++ -O3 -std=c++17 -Wall -o uring_producer uring_producer.cpp -luring -lrt
-g++ -O3 -std=c++17 -Wall -o uring_consumer uring_consumer.cpp -lrt
+g++ -O3 -std=c++17 -Wall -o uring_consumer uring_consumer.cpp -luring -lrt
 
 # 2. Force clear out any corrupted memory segments before launching
 sudo rm -f /dev/shm/ipc_uring_ring_buffer*

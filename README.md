@@ -61,9 +61,9 @@ POSIX message queues are message-oriented, allowing structured, priority-based d
 
 ### D. `io_uring` + Shared Memory SPSC Ring
 The high-performance transport maps a cache-aligned `RingBuffer` struct into POSIX shared memory (`shm_open` and `mmap`):
-- **Lock-Free Signaling**: Synchronization uses atomic indices `head` and `tail` with memory barrier ordering (Acquire-Release semantics) to prevent instruction re-ordering.
+- **Lock-Free Atomics & Sequential Consistency**: Synchronization uses atomic indices `head` and `tail` along with the `consumer_sleeping` coordinator flag. The critical updates and checks use Sequential Consistency memory barriers (`std::memory_order_seq_cst`) to guarantee correct instruction ordering and prevent Store-Load CPU reordering deadlocks.
 - **False-Sharing Avoidance**: The `head` and `tail` pointers are isolated on separate cache lines using `alignas(64)` boundaries, preventing cache-line invalidation loops (ping-ponging) between producer and consumer cores.
-- **Asynchronous Processing**: Uses `liburing` to initialize submission queue rings. When administrative privileges permit, it utilizes kernel polling thread mode (`IORING_SETUP_SQPOLL`), pinning the submission thread to Core 3 to offload event validation from Core 1.
+- **Dual-Ended Asynchronous Wakeup Signaling**: Coordinates sleep and wakeup events via a named FIFO (`/tmp/uring_sig_fifo`) and an atomic `consumer_sleeping` flag. The consumer blocks using `io_uring_submit_and_wait` to read from the signaling FIFO, and the producer wakes it up by submitting write tasks via `io_uring_prep_write`, making the out-of-band signaling path entirely asynchronous and handled via `io_uring` on both ends.
 
 ---
 
@@ -78,10 +78,9 @@ Benchmarks are executed across an exponential sweep of payload sizes $S \in \{64
 Processor affinity is pinned statically using `sched_setaffinity` to isolate tasks onto physical CPU cores, preventing core-hopping and optimizing cache usage:
 - **Producer Core**: Pinned to CPU Core 1.
 - **Consumer Core**: Pinned to CPU Core 2.
-- **SQPOLL Thread** (`io_uring` only): Pinned to CPU Core 3.
 
 ### C. Analytical Metrics
-For each message size class, the benchmark executes 1 warmup run (discarded) and $N = 5$ measured runs (POSIX MQ uses $N = 15$ for statistics stabilization). The following equations define the metrics:
+For each message size class, the benchmark executes 1 warmup run (discarded) and measured runs. Specifically, the POSIX Pipe and UNIX Domain Sockets benchmarks use $N = 5$ measured runs, while the POSIX Message Queue (MQ) and `io_uring` Shared Ring benchmarks use $N = 15$ measured runs for statistics stabilization. The following equations define the metrics:
 1. **Throughput ($T$)**: The volume of data transferred per unit time:
    $$T = \frac{B}{1024^3 \times t_{\text{exec}}} \quad (\text{GiB/s})$$
    where $B$ is the total volume target in bytes, and $t_{\text{exec}}$ is the elapsed execution wall-clock time in seconds.
@@ -124,55 +123,62 @@ All benchmark runs and profiling tasks were executed on a dedicated test machine
 
 ---
 
-## IV. Repository Structure
+### IV. Repository Structure
 
 ```
 .
-├── pipe/                         # POSIX Named Pipes benchmark directory
-│   ├── common.h                  # Common telemetry, message structures, and configurations
-│   ├── pipe_producer.cpp         # Producer C++ application
-│   ├── pipe_consumer.cpp         # Consumer C++ application & statistics calculation
-│   └── run_pipe_bench.sh         # Shell script to compile and run pipe benchmark
+├── src/                          # Source code folders for the IPC benchmark targets
+│   ├── pipe/                     # POSIX Named Pipes benchmark directory
+│   │   ├── common.h              # Message structures and configuration
+│   │   ├── pipe_producer.cpp     # Producer C++ application
+│   │   ├── pipe_consumer.cpp     # Consumer C++ application & stats
+│   │   └── run_pipe_bench.sh     # Script to compile and run pipe benchmark
+│   │
+│   ├── sockets/                  # UNIX Domain Sockets benchmark directory
+│   │   ├── common.h              # Common structures and socket endpoints
+│   │   ├── socket_producer.cpp   # Client socket producer C++ application
+│   │   ├── socket_consumer.cpp   # Server socket consumer & statistics
+│   │   └── run_socket_bench.sh     # Script to compile and run socket benchmark
+│   │
+│   ├── mq/                       # POSIX Message Queue benchmark directory
+│   │   ├── common.h              # Common structures and MQ configuration
+│   │   ├── mq_producer.cpp       # POSIX mq_send producer C++ application
+│   │   ├── mq_consumer.cpp       # POSIX mq_receive consumer & statistics
+│   │   └── run_mq_bench.sh       # Script to compile and run message queue benchmark
+│   │
+│   └── io_uring/                 # io_uring + Shared-Ring benchmark directory
+│       ├── common.h              # Cache-aligned atomic RingBuffer layout
+│       ├── uring_producer.cpp    # liburing-driven producer C++ application
+│       ├── uring_consumer.cpp    # Shared-memory consumer C++ application & stats
+│       └── run_uring_bench.sh    # Script to compile and run io_uring benchmark
 │
-├── Sockets/                      # UNIX Domain Sockets benchmark directory
-│   ├── common.h                  # Common structures and socket endpoints
-│   ├── socket_producer.cpp       # Client-side socket producer C++ application
-│   ├── socket_consumer.cpp       # Server-side socket listener, accept loop, and statistics
-│   └── run_socket_bench.sh       # Shell script to compile and run socket benchmark
+├── data/                         # CSV results datasets and performance log data
+│   ├── pipe_results.csv
+│   ├── socket_results.csv
+│   ├── mq_results.csv
+│   ├── io_uring_results.csv
+│   └── Cache Misses              # Hardware performance counter logs
 │
-├── Updated Message Queue/        # POSIX Message Queue benchmark directory
-│   ├── common.h                  # Common structures, queue configurations, and helper functions
-│   ├── mq_producer.cpp           # POSIX mq_send producer C++ application
-│   ├── mq_consumer.cpp           # POSIX mq_receive consumer C++ application & statistics
-│   └── run_mq_bench.sh           # Shell script to compile and run message queue benchmark
+├── scripts/                      # Visualization and statistical scripts
+│   ├── generate_visualizations.py# Process CSV data and generate plots
+│   └── statistical_analysis.py   # Run 95% Confidence Interval validation reports
 │
-├── uring/                        # io_uring + Shared-Ring benchmark directory
-│   ├── common.h                  # Cache-aligned std::atomic RingBuffer layouts
-│   ├── uring_producer.cpp        # liburing-driven producer C++ application
-│   ├── uring_consumer.cpp        # Shared-memory polling consumer C++ application & statistics
-│   └── run_uring_bench.sh        # Shell script to compile and run io_uring benchmark
-│
-├── scripts/                      # Visualization scripts and helpers
-│   ├── README.md                 # Detailed code breakdown of plotting modules
-│   └── generate_visualizations.py# Python 3 script to process CSV data and plot metrics
-│
-├── figures/                      # Directory for generated figures and visual aids
-│   ├── README.md                 # Image descriptions and interpretation guide
-│   ├── throughput.png            # Throughput comparison chart (GiB/s)
+├── figures/                      # Directory for generated publication assets
+│   ├── throughput.png            # Throughput comparison chart (GB/s)
 │   ├── latency.png               # Latency comparison chart (microseconds, Log Scale)
 │   ├── speedup.png               # io_uring Speedup comparison chart
-│   ├── cache_misses.png          # L1 Data Cache and LLC miss rates comparison chart
-│   ├── cache_misses_summary.csv  # CSV summary containing raw cache loads/miss counts
-│   └── flamegraphs/              # HTML Gallery containing interactive SVG flamegraph files
+│   ├── cache_misses.png          # Cache miss rates comparison chart
+│   ├── cache_misses_summary.csv  # Cache miss CSV counts
+│   ├── throughput_ci.png         # Throughput mean with 95% CI error bars
+│   ├── latency_ci.png            # Latency mean with 95% CI error bars
+│   ├── statistical_analysis.md   # Statistical validation report
+│   └── flamegraphs/              # Interactive flamegraph gallery
+│       ├── index.html            # Gallery page
+│       ├── pipe_flamegraph.svg
+│       ├── socket_flamegraph.svg
+│       ├── mq_flamegraph.svg
+│       └── final_io_uring.jpg
 │
-├── FlameGraphs/                  # Profiling assets and guidelines
-│   ├── Readme.md                 # Perf profiling instructions and SVG generation guides
-│   ├── pipe_flamegraph.svg       # CPU execution profile for Pipe benchmark runs
-│   ├── socket_flamegraph.svg     # CPU execution profile for Socket benchmark runs
-│   ├── mq_flamegraph.svg         # CPU execution profile for POSIX MQ benchmark runs
-│   └── uring_flamegraph.svg      # CPU execution profile for io_uring benchmark runs
-│
-├── Cache Misses                  # Raw log containing hardware performance counters
 └── ipc_implementation_documentation.md # Detailed cross-implementation narrative
 ```
 
@@ -185,31 +191,35 @@ Ensure compile tools, shared library symbols, and runtime packages are installed
 ```bash
 # Ubuntu/Debian dependencies
 sudo apt-get update
-sudo apt-get install -y build-essential liburing-dev python3-matplotlib perf-tools-unstable
+sudo apt-get install -y build-essential liburing-dev python3-matplotlib python3-scipy perf-tools-unstable
 ```
 
 ### B. Benchmark Execution
-Compile and run the benchmarks sequentially from their folders:
+Compile and run the benchmarks sequentially from their folders, and copy their output CSV files to the `data/` directory for visualization processing:
+
 ```bash
 # 1. Run POSIX Pipe Benchmark
-cd pipe && ./run_pipe_bench.sh && cd ..
+cd src/pipe && bash run_pipe_bench.sh && cp -f pipe_results.csv ../../data/ && cd ../..
 
-# 2. Run Sockets Benchmark
-cd Sockets && ./run_socket_bench.sh && cd ..
+# 2. Run UNIX Domain Sockets Benchmark
+cd src/sockets && bash run_socket_bench.sh && cp -f socket_results.csv ../../data/ && cd ../..
 
-# 3. Run Message Queue Benchmark (requires configured message limits)
-cd "Updated Message Queue" && ./run_mq_bench.sh && cd ..
+# 3. Run POSIX Message Queue Benchmark
+cd src/mq && bash run_mq_bench.sh && cp -f mq_results.csv ../../data/ && cd ../..
 
 # 4. Run io_uring Benchmark
-cd uring && ./run_uring_bench.sh && cd ..
+cd src/io_uring && bash run_uring_bench.sh && cp -f io_uring_results.csv ../../data/ && cd ../..
 ```
 
-### C. Visualizations Generation
-Run the Python visualization suite from the repository root:
+### C. Visualizations & Statistical Validation
+Once all baseline datasets are populated under `data/`, run the analysis scripts from the repository root:
 ```bash
+# Process CSV data and generate plots under figures/
 python3 scripts/generate_visualizations.py
+
+# Run statistical analysis and output report figures/statistical_analysis.md
+python3 scripts/statistical_analysis.py
 ```
-This processes the output CSV files, reads the cache misses raw logs, and generates the high-definition plotting assets inside the `figures/` directory.
 
 ---
 
