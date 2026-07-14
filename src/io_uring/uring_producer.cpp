@@ -58,13 +58,19 @@ int main() {
     return 1;
   }
 
+  // --- NEW: Initialize io_uring for the Producer ---
+  struct io_uring ring;
+  if (io_uring_queue_init(64, &ring, 0) < 0) {
+    std::perror("io_uring_queue_init");
+    return 1;
+  }
+
   for (size_t sz : MESSAGE_SIZES) {
     std::cout << "[Producer] Processing Size Target: " << sz << " Bytes\n";
     std::vector<char> payload(sz, 'X');
 
     for (int run = 0; run <= NUM_RUNS; ++run) {
-      // FIXED: Critical Run-Boundary Synchronization Barrier
-      // Wait for the consumer to finish its previous loop and reset the indices
+      // Critical Run-Boundary Synchronization Barrier
       while (rb->head.load(std::memory_order_acquire) != 0 ||
              rb->tail.load(std::memory_order_acquire) != 0) {
         CPU_PAUSE();
@@ -85,18 +91,31 @@ int main() {
         slot.size = static_cast<uint32_t>(sz);
         slot.send_ns = now_ns();
 
-        rb->head.store(h + 1, std::memory_order_release);
+        // FIXED: Strict Sequential Consistency to prevent Store-Load reordering
+        // deadlock
+        rb->head.store(h + 1, std::memory_order_seq_cst);
 
-        // FIXED: Atomic Exchange to prevent FIFO flooding
-        if (rb->consumer_sleeping.load(std::memory_order_acquire) == 1) {
+        // Atomic Exchange + io_uring Wakeup
+        if (rb->consumer_sleeping.load(std::memory_order_seq_cst) == 1) {
           uint32_t expected = 1;
-          // Only write to the kernel if WE successfully flip the flag from 1 to
-          // 0
+
           if (rb->consumer_sleeping.compare_exchange_strong(
                   expected, 0, std::memory_order_acq_rel)) {
             char sig = 'W';
-            if (write(sig_fd, &sig, 1) < 0) {
-              // Suppress warnings, consumer handles state
+
+            // --- NEW: Using io_uring instead of POSIX write() ---
+            struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+            if (sqe) {
+              io_uring_prep_write(sqe, sig_fd, &sig, 1, 0);
+              io_uring_submit(&ring);
+
+              // Safely block and wait for completion.
+              // This keeps `sig` alive on the stack and prevents the SQ from
+              // overflowing!
+              struct io_uring_cqe *cqe;
+              if (io_uring_wait_cqe(&ring, &cqe) == 0) {
+                io_uring_cqe_seen(&ring, cqe);
+              }
             }
           }
         }
@@ -107,6 +126,7 @@ int main() {
     }
   }
 
+  io_uring_queue_exit(&ring); // Clean up the ring
   munmap(rb, sizeof(RingBuffer));
   close(shm_fd);
   close(sig_fd);

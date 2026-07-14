@@ -39,10 +39,10 @@ The benchmark code also follows a simple measurement discipline:
 
 ### Files
 
-- `pipe/common.h`
-- `pipe/pipe_producer.cpp`
-- `pipe/pipe_consumer.cpp`
-- `pipe/run_pipe_bench.sh`
+- `src/pipe/common.h`
+- `src/pipe/pipe_producer.cpp`
+- `src/pipe/pipe_consumer.cpp`
+- `src/pipe/run_pipe_bench.sh`
 
 ### Data Path
 
@@ -63,7 +63,7 @@ Consumer flow:
 3. Open the FIFO once for reading.
 4. Read the header and payload in blocking loops.
 5. Measure latency using the embedded send timestamp.
-6. Write aggregated statistics to `pipe_results.csv`.
+6. Write aggregated statistics to `data/pipe_results.csv`.
 
 ### Implementation Notes
 
@@ -75,10 +75,10 @@ Consumer flow:
 
 ### Files
 
-- `Sockets/common.h`
-- `Sockets/socket_producer.cpp`
-- `Sockets/socket_consumer.cpp`
-- `Sockets/run_socket_bench.sh`
+- `src/sockets/common.h`
+- `src/sockets/socket_producer.cpp`
+- `src/sockets/socket_consumer.cpp`
+- `src/sockets/run_socket_bench.sh`
 
 ### Data Path
 
@@ -100,7 +100,7 @@ Consumer flow:
 3. Set `SO_RCVBUF` for a larger receive window.
 4. Bind and listen on the size-specific socket path.
 5. Accept the producer connection.
-6. Read the header and payload in a loop, then record throughput and latency statistics in `socket_results.csv`.
+6. Read the header and payload in a loop, then record throughput and latency statistics in `data/socket_results.csv`.
 
 ### Implementation Notes
 
@@ -112,10 +112,10 @@ Consumer flow:
 
 ### Files
 
-- `Updated Message Queue/common.h`
-- `Updated Message Queue/mq_producer.cpp`
-- `Updated Message Queue/mq_consumer.cpp`
-- `Updated Message Queue/run_mq_bench.sh`
+- `src/mq/common.h`
+- `src/mq/mq_producer.cpp`
+- `src/mq/mq_consumer.cpp`
+- `src/mq/run_mq_bench.sh`
 
 ### Data Path
 
@@ -136,7 +136,7 @@ Consumer flow:
 3. Configure `mq_attr` with the message size and queue depth.
 4. Open the queue with `O_CREAT | O_RDONLY`.
 5. Receive messages with `mq_receive`.
-6. Compute latency and write statistics to `mq_results.csv`.
+6. Compute latency and write statistics to `data/mq_results.csv`.
 
 ### Implementation Notes
 
@@ -162,32 +162,34 @@ flowchart TD
 
 ### Files
 
-- `uring/common.h`
-- `uring/uring_producer.cpp`
-- `uring/uring_consumer.cpp`
-- `uring/run_uring_bench.sh`
+- `src/io_uring/common.h`
+- `src/io_uring/uring_producer.cpp`
+- `src/io_uring/uring_consumer.cpp`
+- `src/io_uring/run_uring_bench.sh`
 
 ### Data Path
 
 The io_uring version uses a cache-line-aligned shared-memory ring buffer. The producer and consumer coordinate through atomic head and tail indices. The payload is written directly into shared memory slots, so the benchmark emphasizes synchronization and memory locality instead of transport copies.
 
-To prevent high CPU usage from spin-waiting when the ring is empty, a lock-free double-check signaling mechanism coordinates sleep/wakeup states via a named FIFO (`/tmp/uring_sig_fifo`) read asynchronously by `io_uring` in the consumer:
+To prevent high CPU usage from spin-waiting when the ring is empty, a lock-free double-check signaling mechanism coordinates sleep/wakeup states via a named FIFO (`/tmp/uring_sig_fifo`) handled asynchronously by `io_uring` on both sides (reads on the consumer side, writes on the producer side):
 
 1. Producer claims the next free slot.
 2. Producer writes payload bytes into that slot and stamps it with a send timestamp.
-3. Producer publishes by advancing `head` with release ordering.
-4. If `consumer_sleeping` is set to `1`, the producer CAS-resets it to `0` and writes a wakeup byte to the signaling FIFO.
+3. Producer publishes by advancing `head` with Sequential Consistency (`seq_cst`) ordering.
+4. If `consumer_sleeping` is set to `1` (checked with `seq_cst`), the producer CAS-resets it to `0` and writes a wakeup byte to the signaling FIFO asynchronously using `io_uring_prep_write`.
 5. Consumer processes slots as long as `tail != head`.
-6. When the ring is empty (`tail == head`), the consumer registers `consumer_sleeping = 1`, double-checks the indices to prevent race conditions, and blocks using `io_uring_submit_and_wait` on the FIFO.
+6. When the ring is empty (`tail == head`), the consumer registers `consumer_sleeping = 1` using `seq_cst`, double-checks the `head` index using `seq_cst` to prevent race conditions, and blocks using `io_uring_submit_and_wait` on the FIFO.
 
 Producer flow:
 
 1. Pin to the producer core.
 2. Open and map the shared ring buffer object.
 3. Open the signaling FIFO in non-blocking mode.
-4. Copy the payload and record the send timestamp.
-5. Advance the `head` index with release memory ordering.
-6. Check the `consumer_sleeping` flag. If it is `1`, reset it to `0` and write a wakeup byte to the signaling FIFO.
+4. Initialize the producer's `io_uring` ring context.
+5. Copy the payload and record the send timestamp.
+6. Advance the `head` index with Sequential Consistency (`seq_cst`) memory ordering.
+7. Check the `consumer_sleeping` flag using `seq_cst`. If it is `1`, reset it to `0` and write a wakeup byte to the signaling FIFO asynchronously using `io_uring_prep_write`.
+8. Wait for the write completion CQE to clean up queue resources.
 
 Consumer flow:
 
@@ -195,9 +197,9 @@ Consumer flow:
 2. Create and open the named signaling FIFO.
 3. Create and map the same shared ring buffer object.
 4. Initialize the consumer's `io_uring` ring context.
-5. If the ring is empty (`tail == head`), publish `consumer_sleeping = 1`, double-check the `head` index, and block on a read from the signaling FIFO using `io_uring_submit_and_wait(&ring, 1)`.
+5. If the ring is empty (`tail == head`), publish `consumer_sleeping = 1` using Sequential Consistency (`seq_cst`), double-check the `head` index using `seq_cst` to prevent Store-Load reordering race conditions, and block on a read from the signaling FIFO using `io_uring_submit_and_wait(&ring, 1)`.
 6. Read the slot, compute latency, and advance the `tail` index with release ordering.
-7. Store the aggregate statistics in `io_uring_results.csv`.
+7. Store the aggregate statistics in `data/io_uring_results.csv`.
 
 ### Implementation Notes
 
@@ -208,23 +210,24 @@ Consumer flow:
 
 ## Runtime and Output Artifacts
 
-The repository already includes the benchmark outputs:
+The repository stores the benchmark outputs in the `data/` directory:
 
-- `pipe_results.csv`
-- `socket_results.csv`
-- `mq_results.csv`
-- `io_uring_results.csv`
-- `Cache Misses`
-- `FlameGraphs/*.svg`
+- `data/pipe_results.csv`
+- `data/socket_results.csv`
+- `data/mq_results.csv`
+- `data/io_uring_results.csv`
+- `data/Cache Misses`
+- `figures/flamegraphs/*.svg` and `figures/flamegraphs/*.jpg`
 
 The companion Python script `scripts/generate_visualizations.py` turns these into final presentation assets under `figures/`.
 
-## How to Regenerate the Figures
+## How to Regenerate the Figures and Reports
 
 From the repository root:
 
 ```bash
 python3 scripts/generate_visualizations.py
+python3 scripts/statistical_analysis.py
 ```
 
 This command creates:

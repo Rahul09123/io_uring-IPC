@@ -48,32 +48,20 @@ Performance counter stats for './run_socket_bench.sh':
       20.516571000 seconds sys
 
 
-Performance counter stats for './run_uring_bench.sh':
 
-        54,369,796      cpu_atom/L1-dcache-loads/                                               (97.16%)
+ Performance counter stats for './run_uring_bench.sh':
 
-    71,957,777,148      cpu_core/L1-dcache-loads/                                               (99.98%)
-
+        63,276,265      cpu_atom/L1-dcache-loads/                                             
+   164,342,251,628      cpu_core/L1-dcache-loads/                                               (99.99%)
    <not supported>      cpu_atom/L1-dcache-load-misses/                                       
+     6,528,258,435      cpu_core/L1-dcache-load-misses/  #    3.97% of all L1-dcache accesses   (99.99%)
+           325,973      cpu_atom/LLC-loads/                                                   
+     5,792,348,289      cpu_core/LLC-loads/                                                     (99.99%)
+            14,902      cpu_atom/LLC-load-misses/        #    4.57% of all LL-cache accesses  
+       287,867,905      cpu_core/LLC-load-misses/        #    4.97% of all LL-cache accesses    (99.99%)
 
-     5,172,078,168      cpu_core/L1-dcache-load-misses/  #    7.19% of all L1-dcache accesses   (99.98%)
+     155.060598212 seconds time elapsed
 
-           368,240      cpu_atom/LLC-loads/                                                     (97.16%)
-
-     4,361,969,606      cpu_core/LLC-loads/                                                     (99.98%)
-
-            17,423      cpu_atom/LLC-load-misses/        #    4.73% of all LL-cache accesses    (97.16%)
-
-       259,939,495      cpu_core/LLC-load-misses/        #    5.96% of all LL-cache accesses    (99.98%)
-
-
-
-      79.491808515 seconds time elapsed
-
-
-
-     153.496902000 seconds user
-
-       0.908606000 seconds sys 
-
+     252.864386000 seconds user
+      52.354604000 seconds sys
 

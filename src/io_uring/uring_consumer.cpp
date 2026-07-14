@@ -111,13 +111,15 @@ int main() {
         uint64_t h = rb->head.load(std::memory_order_acquire);
 
         if (t == h) {
-          rb->consumer_sleeping.store(1, std::memory_order_release);
+          // FIXED: Strict Sequential Consistency to prevent Store-Load
+          // reordering
+          rb->consumer_sleeping.store(1, std::memory_order_seq_cst);
 
           // Double check to prevent race condition if data arrived instantly
-          if (rb->head.load(std::memory_order_acquire) != t) {
+          if (rb->head.load(std::memory_order_seq_cst) != t) {
             uint32_t expected = 1;
             rb->consumer_sleeping.compare_exchange_strong(
-                expected, 0, std::memory_order_acq_rel);
+                expected, 0, std::memory_order_seq_cst);
             continue;
           }
 
