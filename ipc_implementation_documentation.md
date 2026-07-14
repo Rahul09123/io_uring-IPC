@@ -149,13 +149,15 @@ Consumer flow:
 ### Architecture Diagram
 
 ```mermaid
-flowchart LR
+flowchart TD
 	P[Producer core] -->|writes payload + timestamp| R[(Shared ring buffer)]
 	R -->|reads payload + latency| C[Consumer core]
 	P --> H[head index]
 	C --> T[tail index]
 	H --> R
 	T --> R
+	P -.->|wakes up via named FIFO| F[/Named FIFO/]
+	F -.->|io_uring read notification| C
 ```
 
 ### Files
@@ -169,47 +171,40 @@ flowchart LR
 
 The io_uring version uses a cache-line-aligned shared-memory ring buffer. The producer and consumer coordinate through atomic head and tail indices. The payload is written directly into shared memory slots, so the benchmark emphasizes synchronization and memory locality instead of transport copies.
 
-The buffer is intentionally small enough to force wraparound under load. The
-producer checks the gap between head and tail before writing a new slot, and the
-consumer advances tail only after it has read the slot and computed latency.
-This makes the implementation a single-producer, single-consumer ring with a
-strict publish/consume protocol:
+To prevent high CPU usage from spin-waiting when the ring is empty, a lock-free double-check signaling mechanism coordinates sleep/wakeup states via a named FIFO (`/tmp/uring_sig_fifo`) read asynchronously by `io_uring` in the consumer:
 
 1. Producer claims the next free slot.
-2. Producer writes payload bytes into that slot.
-3. Producer records the send timestamp.
-4. Producer publishes by advancing head with release ordering.
-5. Consumer observes the new head with acquire ordering.
-6. Consumer reads the slot, computes latency, and advances tail.
-
-The implementation uses io_uring primarily as the asynchronous engine around the
-shared memory region. The kernel interaction is therefore lightweight compared
-with stream-based IPC, but the benchmark still keeps io_uring in the control
-path so the setup reflects a realistic Linux runtime.
+2. Producer writes payload bytes into that slot and stamps it with a send timestamp.
+3. Producer publishes by advancing `head` with release ordering.
+4. If `consumer_sleeping` is set to `1`, the producer CAS-resets it to `0` and writes a wakeup byte to the signaling FIFO.
+5. Consumer processes slots as long as `tail != head`.
+6. When the ring is empty (`tail == head`), the consumer registers `consumer_sleeping = 1`, double-checks the indices to prevent race conditions, and blocks using `io_uring_submit_and_wait` on the FIFO.
 
 Producer flow:
 
 1. Pin to the producer core.
 2. Open and map the shared ring buffer object.
-3. Initialize io_uring with SQPOLL and SQ affinity when available.
-4. Copy the payload into the next free slot.
-5. Stamp the slot with a send timestamp.
-6. Advance the head index and optionally submit a no-op SQE to drive the ring.
+3. Open the signaling FIFO in non-blocking mode.
+4. Copy the payload and record the send timestamp.
+5. Advance the `head` index with release memory ordering.
+6. Check the `consumer_sleeping` flag. If it is `1`, reset it to `0` and write a wakeup byte to the signaling FIFO.
 
 Consumer flow:
 
 1. Pin to the consumer core.
-2. Create and map the same shared ring buffer object.
-3. Reset the ring indices for each run.
-4. Wait until the producer publishes data.
-5. Read the slot, compute latency, and advance the tail index.
-6. Store the aggregate statistics in `io_uring_results.csv`.
+2. Create and open the named signaling FIFO.
+3. Create and map the same shared ring buffer object.
+4. Initialize the consumer's `io_uring` ring context.
+5. If the ring is empty (`tail == head`), publish `consumer_sleeping = 1`, double-check the `head` index, and block on a read from the signaling FIFO using `io_uring_submit_and_wait(&ring, 1)`.
+6. Read the slot, compute latency, and advance the `tail` index with release ordering.
+7. Store the aggregate statistics in `io_uring_results.csv`.
 
 ### Implementation Notes
 
 - The ring buffer is padded and aligned to reduce false sharing.
-- The code attempts to use `IORING_SETUP_SQPOLL`, but it falls back to the regular ring setup if privileges are not available.
-- This design is the most specialized in the repository and the one most closely tied to cache behavior and CPU affinity.
+- The design implements a lock-free double-check barrier to avoid the "lost wakeup" race condition common in sleep/wakeup protocols.
+- The signaling path leverages `io_uring_submit_and_wait` to combine SQE submission and blocking-wait into a single kernel entry, minimizing system call overhead when sleeping.
+- By targeting the signaling path rather than the data path with `io_uring`, the application maintains a zero-copy shared-memory hot path and only enters the kernel when coordination is required due to queue emptiness.
 
 ## Runtime and Output Artifacts
 

@@ -1,205 +1,121 @@
-# io_uring Shared-Ring Implementation
+# io_uring Shared-Ring Implementation with Asynchronous FIFO Signaling
 
 ## 1. Overview
-This implementation benchmarks a shared-memory ring buffer data path coordinated with `io_uring` submission/completion activity.
+This implementation benchmarks a cache-aligned POSIX shared-memory circular ring buffer data path. Unlike typical busy-spin designs that consume 100% CPU when idle, this architecture implements a **lock-free double-check signaling barrier** paired with `io_uring` to sleep and wake up the consumer process cleanly.
 
-- Data transport: POSIX shared memory ring buffer
-- Coordination: `io_uring` NOP submissions (SQPOLL when available)
-- Pattern: Producer writes slots -> Consumer reads slots
-- Measurement: Throughput and latency percentiles
-- Output: `io_uring_results.csv`
+* **Data transport**: POSIX shared-memory ring buffer (direct zero-copy path between processes).
+* **Signaling/Wakeup path**: Named FIFO (`/tmp/uring_sig_fifo`) coordinated via asynchronous `io_uring` read notifications.
+* **Flow control**: Atomic head and tail indices with Acquire-Release memory ordering.
+* **Measurement**: Throughput and latency percentiles recorded in `io_uring_results.csv`.
+
+---
 
 ## 2. Architecture
 
-### 2.1 Process Topology
-- Producer (`uring_producer`): writes timestamped payloads into shared ring slots.
-- Consumer (`uring_consumer`): polls ring indices, consumes slots, measures latency.
-- Shared memory ring (`/ipc_uring_ring_buffer`): data and metadata exchange area.
+### 2.1 Process & Signaling Topology
+```
+[Producer Core 1] --(Writes Slot Data)--> [Shared Ring Buffer] --(Reads Slot Data)--> [Consumer Core 2]
+       |                                                                                    |
+       | (Wakes up if consumer_sleeping == 1)                                               | (Sleeps on empty ring)
+       v                                                                                    v
+[Write to named FIFO] ------------------------------------------------------------> [io_uring_submit_and_wait]
+```
+
+* **Producer (`uring_producer`)**: Pin-affinity to Core 1. Writes payload bytes and timestamps into shared slots. If the consumer is flagged as sleeping, writes a wakeup byte to the signaling FIFO.
+* **Consumer (`uring_consumer`)**: Pin-affinity to Core 2. Reads slots from the shared memory area. When the ring is empty, it publishes `consumer_sleeping = 1` and registers a read on the signaling FIFO using `io_uring`.
+* **Shared memory ring (`/ipc_uring_ring_buffer`)**: The aligned memory-mapped region holding queue slots and index flags.
 
 ### 2.2 Ring Buffer Layout
 Defined in `common.h`:
-- `head` (atomic): next producer write index
-- `tail` (atomic): next consumer read index
-- `NUM_SLOTS = 64`
-- Each slot stores:
-  - `send_ns`
-  - `size`
-  - `data[MAX_PAYLOAD]`
+* `head` (atomic `uint64_t`): Next index to write.
+* `tail` (atomic `uint64_t`): Next index to read.
+* `consumer_sleeping` (atomic `uint32_t`): Set to `1` when the consumer is sleeping, and CAS-reset to `0` during wakeups.
+* `NUM_SLOTS = 64`
+* Each slot stores:
+  * `send_ns` (`uint64_t`)
+  * `size` (`uint32_t`)
+  * `data[MAX_PAYLOAD]` (Up to 1 MiB)
 
-Memory alignment (`alignas(64)`) is used to reduce false sharing and cache-line contention.
+All control structures (`head`, `tail`, `consumer_sleeping`) are cache-line aligned (`alignas(64)`) to avoid false sharing.
 
-### 2.3 CPU Affinity Matrix
-- Producer core: `PRODUCER_CORE = 1`
-- Consumer core: `CONSUMER_CORE = 2`
-- SQPOLL core: `SQPOLL_CORE = 3`
-
-If SQPOLL setup fails (often due to missing privileges), code falls back to standard io_uring mode.
-
-### 2.4 Why This Uses Lock-Free Atomics Instead of Mutexes
-The ring is single-producer/single-consumer (SPSC), so a lock-free head/tail index scheme is sufficient:
-- Producer is sole writer of `head`.
-- Consumer is sole writer of `tail`.
-- Each side reads the other index for flow control.
-
-This avoids mutex contention and kernel lock transitions in the hottest path.
+---
 
 ## 3. Data Path and Working
 
 ### 3.1 Producer Flow
-1. Create/map shared memory ring object.
-2. Initialize io_uring with `IORING_SETUP_SQPOLL | IORING_SETUP_SQ_AFF`.
-3. For each message size and run:
-   - Wait for consumer reset (`head == 0` and `tail == 0`).
-   - Check ring fullness (`head - tail < NUM_SLOTS`).
-   - Write payload + metadata into slot at `head % NUM_SLOTS`.
-   - Publish via `head.store(..., release)`.
-   - Submit io_uring NOP operation (used as benchmark coordination signal path).
-   - Repeat until `TOTAL_BYTES` is produced.
+1. Open and memory-map the shared ring buffer object (`/ipc_uring_ring_buffer`).
+2. Open the named signaling FIFO (`/tmp/uring_sig_fifo`) in `O_RDWR | O_NONBLOCK` mode to avoid blocking during initialization.
+3. For each size class and run:
+   * Wait for consumer reset (`head == 0` and `tail == 0`).
+   * For each block:
+     * Check if ring is full (`head - tail >= NUM_SLOTS`). If so, pause and yield CPU.
+     * Copy payload into slot at `head % NUM_SLOTS` and record the send timestamp.
+     * Advance `head` with `std::memory_order_release` to publish the slot.
+     * **Signaling Barrier**: Check `consumer_sleeping`. If `1`, execute a `compare_exchange_strong` to swap it to `0`. If successful, write a 1-byte notification (`'W'`) to the signaling FIFO to wake up the consumer.
 
 ### 3.2 Consumer Flow
-1. Create/map shared ring object.
-2. For each size and run:
-   - Reset `tail = 0`, then `head = 0`.
-   - Wait for producer to publish first item (`head > 0`).
-   - Loop while consumed bytes < `TOTAL_BYTES`:
-     - If `tail == head`, spin with pause/yield macro.
-     - Read slot at `tail % NUM_SLOTS`.
-     - Record latency from `recv_ns - send_ns`.
-     - Touch payload (checksum stride) to avoid dead-code elimination.
-     - Advance `tail` with release store.
-3. Compute stats and write measured runs to CSV.
+1. Create the named signaling FIFO using `mkfifo` and open it in `O_RDWR` mode.
+2. Open and memory-map the shared ring buffer object.
+3. Initialize the consumer's `io_uring` ring context.
+4. For each run:
+   * Reset `tail = 0`, `head = 0`, and `consumer_sleeping = 0`.
+   * Loop until `consumed` matches `TOTAL_BYTES`:
+     * Read `tail` (relaxed) and `head` (acquire).
+     * If the ring is empty (`tail == head`):
+       * Store `1` into `consumer_sleeping` using release ordering.
+       * **Double-check**: Reload `head` (acquire). If `head != tail` in the meantime, CAS `consumer_sleeping` back to `0` and abort the sleep block to prevent a lost wakeup.
+       * If still empty, prepare an `io_uring_prep_read` SQE from the signaling FIFO.
+       * Call **`io_uring_submit_and_wait(&ring, 1)`** to submit the SQE and sleep until the producer writes to the FIFO.
+       * Once awake, consume the read completion event, clear the CQE, and continue the loop.
+     * Consume slot data at `tail % NUM_SLOTS`, compute latency statistics, and verify the checksum.
+     * Publish updated `tail` index using `std::memory_order_release`.
 
-### 3.3 Synchronization Model
-- Lock-free SPSC semantics via atomic indices.
-- Memory ordering:
-  - Producer publishes slots with `release` on `head`.
-  - Consumer observes with `acquire` on `head` and publishes `tail` with `release`.
+### 3.3 Synchronization and Safety Details
+* **Zero-copy Data Path**: Payloads are read directly from the shared memory mapped slots.
+* **Race Prevention**: The atomic double-check loop in the consumer avoids the "lost wakeup" race condition. If a producer writes after the sleep flag is set but before the read SQE is submitted, the write is buffered in the FIFO, allowing the consumer's subsequent `io_uring` submission to resolve instantly.
+* **FIFO Flooding Prevention**: The producer's CAS ensures that at most 1 byte is written to the signaling FIFO per sleep cycle, keeping the signaling FIFO clean and bounding kernel-side pipe allocations.
 
-### 3.4 Ring and Buffer Sizes (Exact)
-From `common.h` and producer setup:
-
-- `NUM_SLOTS = 64`
-- `MAX_PAYLOAD = 1,048,576` bytes
-- Each slot contains:
-  - `send_ns` (`uint64_t`)
-  - `size` (`uint32_t`)
-  - `data[MAX_PAYLOAD]`
-- Latency sample capacity: `MAX_LAT_SAMPLES = 4 * 1024 * 1024`
-- io_uring SQ/CQ depth requested: `256`
-- SQPOLL idle timeout: `sq_thread_idle = 100000`
-
-### 3.5 Why These Sizes Were Chosen
-- `NUM_SLOTS = 64`: enough in-flight slots to smooth producer/consumer phase skew without excessive shared memory footprint.
-- `MAX_PAYLOAD = 1 MiB`: aligns with largest benchmark payload.
-- Queue depth `256`: adequate for frequent NOP submissions while keeping management overhead small.
-- Large latency sample cap: stable percentile estimation across long transfers.
-
-### 3.6 Run Structure
-`NUM_RUNS = 5` and loop executes `run = 0..5`:
-- `run=0`: warmup
-- `run=1..5`: measured runs written to CSV
-
-Per size: 6 total runs, 5 recorded.
-
-### 3.7 Message Size Matrix
-Payload sizes in bytes:
-- `64`, `256`, `1024`, `4096`, `16384`, `65536`, `262144`, `1048576`
-
-### 3.8 Timestamping and Latency Unit
-- Producer writes `send_ns` per slot.
-- Consumer samples `recv_ns` during slot consumption.
-- Latency unit in CSV is microseconds: `(recv_ns - send_ns) / 1000.0`.
-
-### 3.9 Why Spin-Wait Is Used
-Both producer and consumer use pause/yield busy-wait when ring is full/empty. This reduces blocking syscall overhead and keeps latency low for high-frequency handoff, at the cost of CPU occupancy.
-
-### 3.10 Why Payload Checksum Touch Exists
-Consumer touches payload bytes every 64 bytes to ensure data is actually read, avoiding unrealistic optimization where payload transfer cost is underrepresented.
+---
 
 ## 4. Metrics and Statistics
-`io_uring_results.csv` includes:
-- `message_size_bytes`
-- `run`
-- `throughput_gbps`
-- `avg_latency_us`
-- `stddev_us`
-- `p50_us`, `p95_us`, `p99_us`
+Collected metrics are stored in `io_uring_results.csv`:
+* `message_size_bytes`: Sweep target size (64 B to 1 MiB).
+* `run`: Run iteration (warmup 0 is printed only, 1-5 recorded).
+* `throughput_gbps`: Effective GiB/s.
+* `avg_latency_us` / `stddev_us` / `p50_us` / `p95_us` / `p99_us`: Microsecond latencies.
 
-Warmup (`run=0`) is printed only, not persisted.
+---
 
-## 5. Files and Their Roles
-- `common.h`: ring structure, constants, affinity settings.
-- `uring_producer.cpp`: producer + io_uring setup and NOP submission loop.
-- `uring_consumer.cpp`: consumer polling loop, metrics generation.
-- `run_uring_bench.sh`: compile, shared-memory cleanup, launch orchestration.
-- `io_uring_results.csv`: benchmark output.
+## 5. Build and Run
 
-## 6. Build and Run
-From this directory:
-
-```bash
-g++ -O3 -std=c++17 -Wall -o uring_producer uring_producer.cpp -luring -lrt
-g++ -O3 -std=c++17 -Wall -o uring_consumer uring_consumer.cpp -lrt
-sudo rm -f /dev/shm/ipc_uring_ring_buffer*
-sudo ./uring_consumer &
-sleep 1.5
-sudo ./uring_producer
-wait
-```
-
-Or run:
-
+Compile and execute using the automated script:
 ```bash
 bash run_uring_bench.sh
 ```
 
-## 7. Dependencies and Platform
-- OS: Linux kernel with io_uring support
-- Compiler: `g++` with C++17 support
-- Libraries:
-  - `liburing` (`-luring`)
-  - POSIX realtime (`-lrt`)
-- System interfaces:
-  - POSIX shared memory (`shm_open`, `mmap`)
-  - CPU affinity (`sched_setaffinity`)
-  - atomic operations with explicit memory order
+Or manually:
+```bash
+# Compile producer and consumer (both require -luring and -lrt)
+g++ -O3 -std=c++17 -Wall -o uring_producer uring_producer.cpp -luring -lrt
+g++ -O3 -std=c++17 -Wall -o uring_consumer uring_consumer.cpp -luring -lrt
 
-### 7.1 Detailed Primitive Inventory
-- Ring setup/teardown: `shm_open`, `ftruncate`, `mmap`, `munmap`, `shm_unlink`
-- io_uring lifecycle: `io_uring_queue_init_params`, `io_uring_get_sqe`, `io_uring_prep_nop`, `io_uring_submit`, `io_uring_peek_cqe`, `io_uring_cqe_seen`, `io_uring_queue_exit`
-- Synchronization primitives: C++ `std::atomic<uint64_t>` with acquire/release semantics
-- CPU pinning: `sched_setaffinity`
+# Clear existing segments
+sudo rm -f /dev/shm/ipc_uring_ring_buffer*
+rm -f /tmp/uring_sig_fifo
 
-## 8. Privilege and Kernel Notes
-- SQPOLL mode may require elevated privileges/capabilities.
-- Script runs producer and consumer with `sudo` to improve compatibility with SQPOLL and shm permissions.
-- If SQPOLL is unavailable, benchmark still runs in fallback mode.
+# Start consumer in background
+sudo ./uring_consumer &
+sleep 1.5
 
-### 8.1 SQPOLL Fallback Behavior
-If `io_uring_queue_init_params` with SQPOLL flags fails:
-- Code reinitializes io_uring with default params (no SQPOLL).
-- Benchmark continues and still emits results.
-- Throughput/latency may differ from SQPOLL-enabled runs.
+# Run producer
+sudo ./uring_producer
+wait
+```
 
-## 9. Reproducibility Notes
-- Keep ring size, slot count, and core pinning unchanged across runs.
-- Ensure stale shared-memory objects are removed before execution.
-- Use consistent kernel version and io_uring configuration.
+---
 
-## 10. Limitations
-- The data path is shared memory; io_uring here is used for coordination activity, not direct socket/file transfer.
-- Spin-wait loops can be sensitive to CPU frequency scaling and co-scheduled workloads.
-- Reported throughput variable is named `gbps` but computed as GiB/s-style transfer/time.
-- Shared ring footprint is large because each of 64 slots reserves 1 MiB payload space.
-
-## 11. Constant Reference (from `common.h`)
-- `PRODUCER_CORE = 1`
-- `CONSUMER_CORE = 2`
-- `SQPOLL_CORE = 3`
-- `MESSAGE_SIZES = {64,256,1024,4096,16384,65536,262144,1048576}`
-- `NUM_RUNS = 5`
-- `TOTAL_BYTES = 2*1024*1024*1024`
-- `NUM_SLOTS = 64`
-- `MAX_PAYLOAD = 1048576`
-- `MAX_LAT_SAMPLES = 4*1024*1024`
-- `SHM_RING_NAME = /ipc_uring_ring_buffer`
+## 6. Primitives & APIs Used
+* **Shared memory lifecycles**: `shm_open`, `ftruncate`, `mmap`, `munmap`, `shm_unlink`
+* **Signaling channel**: `mkfifo`, `open`, `write`, `close`, `unlink`
+* **io_uring routines**: `io_uring_queue_init`, `io_uring_get_sqe`, `io_uring_prep_read`, `io_uring_submit_and_wait`, `io_uring_peek_cqe`, `io_uring_cqe_seen`, `io_uring_queue_exit`
+* **Thread settings**: `sched_setaffinity` (Producer Core 1, Consumer Core 2)

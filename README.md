@@ -63,7 +63,7 @@ POSIX message queues are message-oriented, allowing structured, priority-based d
 The high-performance transport maps a cache-aligned `RingBuffer` struct into POSIX shared memory (`shm_open` and `mmap`):
 - **Lock-Free Signaling**: Synchronization uses atomic indices `head` and `tail` with memory barrier ordering (Acquire-Release semantics) to prevent instruction re-ordering.
 - **False-Sharing Avoidance**: The `head` and `tail` pointers are isolated on separate cache lines using `alignas(64)` boundaries, preventing cache-line invalidation loops (ping-ponging) between producer and consumer cores.
-- **Asynchronous Processing**: Uses `liburing` to initialize submission queue rings. When administrative privileges permit, it utilizes kernel polling thread mode (`IORING_SETUP_SQPOLL`), pinning the submission thread to Core 3 to offload event validation from Core 1.
+- **Asynchronous Wakeup Signaling**: Coordinates sleep and wakeup events via a named FIFO (`/tmp/uring_sig_fifo`) and an atomic `consumer_sleeping` flag. The consumer sleeps using `io_uring_submit_and_wait` to read from the FIFO, avoiding high-CPU polling loops while keeping notification latency sub-microsecond.
 
 ---
 
@@ -78,7 +78,6 @@ Benchmarks are executed across an exponential sweep of payload sizes $S \in \{64
 Processor affinity is pinned statically using `sched_setaffinity` to isolate tasks onto physical CPU cores, preventing core-hopping and optimizing cache usage:
 - **Producer Core**: Pinned to CPU Core 1.
 - **Consumer Core**: Pinned to CPU Core 2.
-- **SQPOLL Thread** (`io_uring` only): Pinned to CPU Core 3.
 
 ### C. Analytical Metrics
 For each message size class, the benchmark executes 1 warmup run (discarded) and $N = 5$ measured runs (POSIX MQ uses $N = 15$ for statistics stabilization). The following equations define the metrics:

@@ -20,10 +20,12 @@ constexpr size_t MAX_PAYLOAD     = 1048576;                  // 1MB
 constexpr size_t MAX_LAT_SAMPLES = 4 * 1024 * 1024;
 
 constexpr char   SHM_RING_NAME[] = "/ipc_uring_ring_buffer";
+constexpr char   SIGNAL_PATH[]   = "/tmp/uring_sig_fifo";
 
 struct alignas(64) RingBuffer {
     alignas(64) std::atomic<uint64_t> head;  
     alignas(64) std::atomic<uint64_t> tail;  
+    alignas(64) std::atomic<uint32_t> consumer_sleeping;
 
     struct alignas(64) Slot {
         uint64_t send_ns;          
