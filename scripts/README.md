@@ -23,7 +23,7 @@ The script is structured as a modular data processing and plotting pipeline. Bel
 
 ### 2.2 Data Ingestion Functions
 - **`load_csv_rows(path: Path) -> List[dict]`**: Opens a benchmark CSV file and parses every column, converting fields to correct types (integers for sizes/runs, floats for latencies/throughput).
-- **`group_by_size(rows, metric) -> Dict[int, List[float]]`**: Groups all recorded runs by their message size class. For example, it aggregates the throughputs of all 5 runs for the 4096-byte message class.
+- **`group_by_size(rows, metric) -> Dict[int, List[float]]`**: Groups all recorded runs by their message size class. For example, it aggregates the throughputs of all 15 runs for the 4096-byte message class.
 
 ### 2.3 Statistical Aggregators
 - **`summarize_grouped_distribution(grouped) -> (sizes, medians, Q1, Q3, means)`**:
