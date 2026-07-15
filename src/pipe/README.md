@@ -103,11 +103,11 @@ Exact values from code:
 Kernel may clamp the actual pipe size to system limits; benchmark records behavior under effective system configuration.
 
 ### 3.6 Run Structure
-`NUM_RUNS = 5`, loop executes `run = 0..5`:
+`NUM_RUNS = 15`, loop executes `run = 0..15`:
 - `run=0`: warmup (not written to CSV)
-- `run=1..5`: measured runs (written to CSV)
+- `run=1..15`: measured runs (written to CSV)
 
-Per message size: 6 total runs, 5 recorded runs.
+Per message size: 16 total runs, 15 recorded runs.
 
 ### 3.7 Message Size Matrix
 Configured payload sizes (bytes):
@@ -190,7 +190,7 @@ bash run_pipe_bench.sh
 - `PRODUCER_CORE = 1`
 - `CONSUMER_CORE = 2`
 - `MESSAGE_SIZES = {64,256,1024,4096,16384,65536,262144,1048576}`
-- `NUM_RUNS = 5`
+- `NUM_RUNS = 15`
 - `MAX_PAYLOAD = 1048576`
 - `MAX_LAT_SAMPLES = 4*1024*1024`
 - `PIPE_FIFO_PATH = /tmp/ipc_pipe_bench`
@@ -226,7 +226,7 @@ The producer is responsible for streaming data into the pipe:
      - Set the payload size in the header structure.
      - Open the write end of the FIFO (`open(dynamic_fifo, O_WRONLY)`). This call blocks until the consumer has opened the read end, acting as an implicit synchronization boundary.
      - Invoke `fcntl(fd, F_SETPIPE_SZ, MAX_PAYLOAD)` to increase the capacity of the kernel pipe buffer to 1 MiB (improving write efficiency for large messages).
-     - Run `NUM_RUNS + 1` loops (warmup + 5 measured runs).
+     - Run `NUM_RUNS + 1` loops (warmup + 15 measured runs).
      - Inside each run loop, capture `now_ns()`, write the frame to the FIFO using `write_all`, increment `produced` counter, and call `sched_yield()` to let the OS schedule the consumer.
      - Close the FIFO descriptor and pause for 5 milliseconds to let the consumer settle.
 
@@ -246,7 +246,7 @@ The consumer receives the data stream, validates it, and generates the final met
   4. For each message size:
      - Formulate the FIFO name, delete any stale nodes with `unlink()`, and create a new FIFO using `mkfifo(..., 0666)`.
      - Open the FIFO for reading (`open(..., O_RDONLY)`).
-     - For each run (0 to 5):
+     - For each run (0 to 15):
        - Reset `Telemetry` to zero.
        - Read the header and then read the payload block into `payload_buf`.
        - Record `recv_ns` immediately upon receipt.
@@ -255,6 +255,6 @@ The consumer receives the data stream, validates it, and generates the final met
        - If space permits, store the latency in the `Telemetry` array.
        - Accumulate total bytes received until the target payload volume is reached.
        - Compute execution time and trigger `compute_stats()`.
-       - Write statistics for runs 1 to 5 to `pipe_results.csv` (ignoring run 0 warmup).
+       - Write statistics for runs 1 to 15 to `pipe_results.csv` (ignoring run 0 warmup).
      - Close the FIFO read descriptor and remove the path with `unlink()`.
   5. Close CSV, munmap telemetry, and unlink telemetry shm.

@@ -80,7 +80,7 @@ Processor affinity is pinned statically using `sched_setaffinity` to isolate tas
 - **Consumer Core**: Pinned to CPU Core 2.
 
 ### C. Analytical Metrics
-For each message size class, the benchmark executes 1 warmup run (discarded) and measured runs. Specifically, the POSIX Pipe and UNIX Domain Sockets benchmarks use $N = 5$ measured runs, while the POSIX Message Queue (MQ) and `io_uring` Shared Ring benchmarks use $N = 15$ measured runs for statistics stabilization. The following equations define the metrics:
+For each message size class, the benchmark executes 1 warmup run (discarded) and $N = 15$ measured runs for statistics stabilization across all IPC mechanisms. The following equations define the metrics:
 1. **Throughput ($T$)**: The volume of data transferred per unit time:
    $$T = \frac{B}{1024^3 \times t_{\text{exec}}} \quad (\text{GiB/s})$$
    where $B$ is the total volume target in bytes, and $t_{\text{exec}}$ is the elapsed execution wall-clock time in seconds.
