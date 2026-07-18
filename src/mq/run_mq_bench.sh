@@ -11,7 +11,11 @@ g++ -O3 -std=c++17 -Wall -o mq_consumer mq_consumer.cpp -lrt
 ulimit -n 65535
 ulimit -q 209715200
 
-# 3. Wipe out any hidden zombie descriptors from kernel space
+# 3. Hard reset system queue counts
+sudo sysctl -w fs.mqueue.queues_max=2048
+sudo sysctl -w fs.mqueue.msgsize_max=1048600
+
+# 4. Wipe out any hidden zombie descriptors from kernel space
 sudo rm -rf /dev/mqueue/*
 
 echo "======================================================"
