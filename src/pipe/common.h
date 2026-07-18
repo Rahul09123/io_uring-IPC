@@ -16,6 +16,8 @@ constexpr size_t MAX_PAYLOAD     = 1048576;                  // 1MB
 constexpr size_t MAX_LAT_SAMPLES = 4 * 1024 * 1024;
 
 constexpr char   PIPE_FIFO_PATH[] = "/tmp/ipc_pipe_bench";
+constexpr char   PIPE_FIFO_PATH_A_TO_B[] = "/tmp/ipc_pipe_bench_a_to_b";
+constexpr char   PIPE_FIFO_PATH_B_TO_A[] = "/tmp/ipc_pipe_bench_b_to_a";
 constexpr char   SHM_TEL_NAME[]   = "/ipc_pipe_telemetry";
 
 struct MessageHeader {

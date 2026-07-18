@@ -15,26 +15,37 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 MESSAGE_SIZES = [64, 256, 1024, 4096, 16384, 65536, 262144, 1048576]
 BENCHMARKS = {
-    "pipe": ("POSIX pipe", ROOT / "data" / "pipe_results.csv", "#1f77b4"),
-    "socket": ("Unix domain socket", ROOT / "data" / "socket_results.csv", "#ff7f0e"),
-    "mq": ("POSIX message queue", ROOT / "data" / "mq_results.csv", "#2ca02c"),
-    "uring": ("io_uring shared ring", ROOT / "data" / "io_uring_results.csv", "#d62728"),
+    "pipe": ("POSIX pipe", ROOT / "data" / "pipe_throughput.csv", ROOT / "data" / "pipe_latency.csv", "#1f77b4"),
+    "socket": ("Unix domain socket", ROOT / "data" / "socket_throughput.csv", ROOT / "data" / "socket_latency.csv", "#ff7f0e"),
+    "mq": ("POSIX message queue", ROOT / "data" / "mq_throughput.csv", ROOT / "data" / "mq_latency.csv", "#2ca02c"),
+    "uring": ("io_uring shared ring", ROOT / "data" / "uring_uring_throughput.csv", ROOT / "data" / "uring_uring_latency.csv", "#d62728"),
 }
 
 def load_data():
     raw_data = {}
-    for key, (label, path, color) in BENCHMARKS.items():
-        if not path.exists():
-            raise FileNotFoundError(f"Missing benchmark CSV: {path}")
+    for key, (label, t_path, l_path, color) in BENCHMARKS.items():
+        if not t_path.exists():
+            raise FileNotFoundError(f"Missing benchmark throughput CSV: {t_path}")
+        if not l_path.exists():
+            raise FileNotFoundError(f"Missing benchmark latency CSV: {l_path}")
         
         runs = defaultdict(lambda: {"throughput": [], "latency": []})
-        with path.open(newline="") as f:
+        
+        # Load throughput
+        with t_path.open(newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 sz = int(float(row["message_size_bytes"]))
                 runs[sz]["throughput"].append(float(row["throughput_gbps"]))
+                
+        # Load latency
+        with l_path.open(newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                sz = int(float(row["message_size_bytes"]))
                 # Using p50_us (median latency) for latency runs analysis
                 runs[sz]["latency"].append(float(row["p50_us"]))
+                
         raw_data[key] = runs
     return raw_data
 
@@ -101,7 +112,7 @@ def plot_with_ci(stats_summary):
     
     # 1. Throughput Plot with 95% CI error bars
     fig, ax = plt.subplots(figsize=(7.5, 4.2))
-    for key, (label, _, color) in BENCHMARKS.items():
+    for key, (label, _, _, color) in BENCHMARKS.items():
         means = [stats_summary[sz][key]["t_mean"] for sz in MESSAGE_SIZES]
         yerr_lower = [stats_summary[sz][key]["t_mean"] - stats_summary[sz][key]["t_ci"][0] for sz in MESSAGE_SIZES]
         yerr_upper = [stats_summary[sz][key]["t_ci"][1] - stats_summary[sz][key]["t_mean"] for sz in MESSAGE_SIZES]
@@ -125,7 +136,7 @@ def plot_with_ci(stats_summary):
     
     # 2. Latency Plot with 95% CI error bars
     fig, ax = plt.subplots(figsize=(7.5, 4.2))
-    for key, (label, _, color) in BENCHMARKS.items():
+    for key, (label, _, _, color) in BENCHMARKS.items():
         means = [stats_summary[sz][key]["l_mean"] for sz in MESSAGE_SIZES]
         yerr_lower = [stats_summary[sz][key]["l_mean"] - stats_summary[sz][key]["l_ci"][0] for sz in MESSAGE_SIZES]
         yerr_upper = [stats_summary[sz][key]["l_ci"][1] - stats_summary[sz][key]["l_mean"] for sz in MESSAGE_SIZES]

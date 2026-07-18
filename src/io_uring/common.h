@@ -19,7 +19,24 @@ constexpr size_t MAX_PAYLOAD = 1048576; // 1MB
 constexpr size_t MAX_LAT_SAMPLES = 4 * 1024 * 1024;
 
 constexpr char SHM_RING_NAME[] = "/ipc_uring_ring_buffer";
-constexpr char SIGNAL_PATH[] = "/tmp/uring_sig_fifo";
+constexpr char SIGNAL_PATH_A_TO_B[] = "/tmp/uring_sig_fifo_a_to_b";
+constexpr char SIGNAL_PATH_B_TO_A[] = "/tmp/uring_sig_fifo_b_to_a";
+constexpr char EVENTFD_SOCKET_PATH[] = "/tmp/uring_evfd_socket";
+
+enum class WakeupVariant {
+  SPIN,
+  BACKOFF,
+  ADAPTIVE,
+  FUTEX,
+  EVENTFD,
+  URING
+};
+
+enum class ArrivalRegime {
+  SATURATED,
+  BURSTY,
+  OFFERED
+};
 
 struct alignas(64) RingBuffer {
   alignas(64) std::atomic<uint64_t> head;
@@ -32,6 +49,11 @@ struct alignas(64) RingBuffer {
     char data[MAX_PAYLOAD];
   };
   Slot slots[NUM_SLOTS];
+};
+
+struct SharedMemoryLayout {
+  RingBuffer ring_a_to_b;
+  RingBuffer ring_b_to_a;
 };
 
 struct Telemetry {

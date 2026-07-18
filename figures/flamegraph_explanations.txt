@@ -1,0 +1,56 @@
+================================================================================
+IMAGE CAPTION / EXPLANATION FOR: POSIX Message Queue (mq_flamegraph.svg)
+================================================================================
+Description:
+CPU profiling reveals a flat, kernel-heavy execution structure dominated by message serialization and virtual filesystem (VFS) operations. 
+
+Key Hotspots & Call Stacks:
+- sys_mq_timedsend / sys_mq_timedreceive: System call entry points that validate queue state, manage message priorities, and enforce synchronous ordering.
+- pipelined_send / pipelined_receive: An optimized kernel path that bypasses queue allocation to copy payloads directly to waiting consumers.
+- mqueue_evict_inode & VFS locks: Inode locking and file descriptor management overhead due to POSIX message queues being represented as virtual filesystem nodes.
+
+Takeaway:
+While direct-copy pipeline optimizations reduce memory transit overhead, the strict serialization, priority checks, and virtual filesystem (VFS) locking mechanisms lead to high kernel execution times under load.
+
+================================================================================
+IMAGE CAPTION / EXPLANATION FOR: POSIX Pipe (pipe_flamegraph.svg)
+================================================================================
+Description:
+Profiling displays wide stack traces dominated by blocking reads/writes, frequent context switches, and heavy memory copying across the user-kernel boundary.
+
+Key Hotspots & Call Stacks:
+- pipe_read / pipe_write: Core circular buffer handlers that manage mutex locks and enforce FIFO queue limits.
+- copy_to_user / copy_from_user (copy_user_enhanced_fast_string): Highly active frames indicating substantial CPU cycles spent moving data across security rings.
+- autoremove_wake_function / try_to_wake_up: Prominent scheduling wakeups representing thread sleep cycles when pipe buffers are full or empty.
+
+Takeaway:
+Performance is constrained by double-copy overhead (User -> Kernel -> User) and frequent context switches as the scheduler repeatedly yields execution when buffers block, increasing latency.
+
+================================================================================
+IMAGE CAPTION / EXPLANATION FOR: UNIX Domain Socket (socket_flamegraph.svg)
+================================================================================
+Description:
+The profile demonstrates a deep, complex call hierarchy reflecting socket connection states, stream buffering, and serial lock contention.
+
+Key Hotspots & Call Stacks:
+- unix_stream_sendmsg / unix_stream_recvmsg: Main entry points handling stream packetization, flow control, and socket-level locks.
+- sock_alloc_send_pskb / skb_copy_datagram_from_iter: Frame allocation for socket descriptor buffers (sk_buff), which incurs heavy allocation and parsing overhead.
+- mutex_lock / spin_lock: Serialized access locks on read/write queues that create significant lock contention under high-throughput IPC stress.
+
+Takeaway:
+The socket API incurs the highest kernel overhead due to packetization layer abstractions, frequent socket buffer (sk_buff) allocations, and extensive synchronization lock cycles.
+
+================================================================================
+IMAGE CAPTION / EXPLANATION FOR: io_uring Shared Ring (final_io_uring.jpg)
+================================================================================
+Description:
+Profiling displays extremely shallow user-space stacks for the application worker threads and a dedicated, isolated kernel thread handling SQPOLL entry processing.
+
+Key Hotspots & Call Stacks:
+- Lock-free Userspace Spinloops: Producer and consumer processes spend almost all CPU cycles checking atomic head/tail ring pointers in shared memory, using yield/pause instructions.
+- io_sq_thread: A dedicated kernel thread executing on an isolated core that polls the submission queue (SQPOLL) and completes I/O, eliminating user-to-kernel context-switching overhead.
+- Shared memory layout (mmap): Bypasses standard read/write system calls entirely by referencing lock-free ring slots directly.
+
+Takeaway:
+By utilizing memory-mapped lock-free queues (SPSC) and offloading submission polling to an independent kernel thread, io_uring bypasses system call context switches and kernel memory copies, delivering peak throughput and sub-microsecond latencies.
+================================================================================
