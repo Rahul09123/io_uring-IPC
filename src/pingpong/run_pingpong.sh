@@ -89,7 +89,7 @@ for ipc in "${SELECTED_IPCS[@]}"; do
         pipe)         compile_binary "$SCRIPT_DIR/pp_pipe.cpp"      "$BUILD_DIR/pp_pipe";;
         unix_socket)  compile_binary "$SCRIPT_DIR/pp_socket.cpp"    "$BUILD_DIR/pp_socket";;
         shm_io_uring) compile_binary "$SCRIPT_DIR/pp_shm_uring.cpp" "$BUILD_DIR/pp_shm_uring";;
-        posix_mq)     compile_binary "$SCRIPT_DIR/pp_mq.cpp"        "$BUILD_DIR/pp_mq" "-lmq";;
+        posix_mq)     compile_binary "$SCRIPT_DIR/pp_mq.cpp"        "$BUILD_DIR/pp_mq";;
         shm_ablation) compile_binary "$SCRIPT_DIR/pp_ablation.cpp"  "$BUILD_DIR/pp_ablation";;
     esac
 done
