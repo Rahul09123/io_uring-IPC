@@ -3,7 +3,7 @@
 ---
 
 ## Abstract
-Modern system design increasingly shifts toward decoupled, microservices-based, and multi-process architectures, heightening the reliance on Inter-Process Communication (IPC) throughput and latency. Traditionally, IPC mechanisms like POSIX Pipes, UNIX Domain Sockets, and POSIX Message Queues have mediated data transfers through the Linux kernel, incurring system-call transitions, context-switching latency, and memory copies. This paper presents a comparative empirical evaluation of traditional kernel-mediated IPC mechanisms against a lock-free, cache-aligned Shared Memory Ring buffer assisted by Linux's asynchronous I/O framework (`io_uring`). We evaluate the performance metrics across a workload size sweep (64 Bytes to 1 MiB) with hardware CPU core affinity pinning. Our findings show that the `io_uring` shared-memory mechanism achieves up to a $10\times$ throughput speedup and reduces median latency by several orders of magnitude under medium message sizes by bypassing user-kernel transitions and avoiding cache-line false sharing.
+Modern system design increasingly shifts toward decoupled, microservices-based, and multi-process architectures, heightening the reliance on Inter-Process Communication (IPC) throughput and latency. Traditionally, IPC mechanisms like POSIX Pipes, UNIX Domain Sockets, and POSIX Message Queues have mediated data transfers through the Linux kernel, incurring system-call transitions, context-switching latency, and memory copies. This paper presents a comparative empirical evaluation of traditional kernel-mediated IPC mechanisms against a lock-free, cache-aligned Shared Memory Ring buffer with `io_uring`-assisted wakeup signaling. The payload moves through POSIX shared memory via atomic SPSC indexing; `io_uring` is used exclusively for out-of-band wakeup coordination when the ring is empty, keeping the hot data path entirely in userspace. We evaluate performance metrics across a workload size sweep (64 Bytes to 1 MiB) with hardware CPU core affinity pinning. Our findings show that the shared-memory mechanism achieves up to **6.5×** throughput over Unix Domain Sockets and significantly reduces median latency for small and large messages by bypassing user-kernel transitions and avoiding cache-line false sharing. At 1 MiB payloads, Unix sockets and POSIX MQ exceed the ring buffer's throughput due to ring slot exhaustion.
 
 ---
 
@@ -12,7 +12,7 @@ Inter-Process Communication is the bedrock of concurrent system design on Unix-l
 
 Traditional IPC options rely on kernel-mediated buffer boundaries. While providing clean process separation and safety, they enforce system call overhead (e.g., `read`, `write`, `sendmsg`, `recvmsg`) and physical memory copies between userspace processes and kernel ring structures. To address these overheads, memory-mapped shared regions have been utilized for zero-copy transfers, but coordinating access to these regions usually requires synchronization primitives like mutexes or semaphores, which can default to kernel-space blocking under lock contention.
 
-This paper evaluates a lock-free, Single-Producer Single-Consumer (SPSC) ring buffer architecture mapped into shared memory. The architecture utilizes atomic memory operations to coordinate boundaries without system calls, and leverages Linux's `io_uring` kernel polling (`SQPOLL`) for asynchronous out-of-band coordination. We benchmark this mechanism against three ubiquitous kernel-mediated baselines under a strict, hardware-pinned testing methodology.
+This paper evaluates a lock-free, Single-Producer Single-Consumer (SPSC) ring buffer architecture mapped into POSIX shared memory. The architecture utilizes atomic memory operations to coordinate ring boundaries without system calls on the hot path. `io_uring` is used in default interrupt mode (not SQPOLL) exclusively for the out-of-band sleep/wakeup signaling path via a named FIFO — the payload itself is transferred via `memcpy` into shared memory slots, incurring no kernel crossing. We benchmark this mechanism against three ubiquitous kernel-mediated baselines under a strict, hardware-pinned testing methodology.
 
 ---
 
@@ -35,9 +35,10 @@ graph TD
         K_MQ -->|mq_receive| C3[Consumer Core 2]
     end
     subgraph io_uring Shared Ring
-        P4[Producer Core 1] -->|mmap Release| SHM_RING[Mmapped Shared Ring]
-        C4[Consumer Core 2] -->|mmap Acquire| SHM_RING
-        SHM_RING -.->|SQPOLL| K_SQ[SQPOLL Kernel Thread Core 3]
+        P4[Producer Core 1] -->|memcpy + head.store| SHM_RING[Mmapped Shared Ring]
+        C4[Consumer Core 2] -->|tail.load + tail.store| SHM_RING
+        P4 -.->|io_uring WRITE wakeup byte| FIFO[/Named FIFO/]
+        FIFO -.->|io_uring READ blocks until wakeup| C4
     end
 ```
 
@@ -56,7 +57,7 @@ Unix Domain Sockets provide bi-directional stream-oriented communication. Unlike
 ### C. POSIX Message Queues (`mqueue`)
 POSIX message queues are message-oriented, allowing structured, priority-based delivery:
 - **API**: Relies on `mq_send` and `mq_receive`.
-- **Limits**: Constrained by kernel sysctl limits (`fs.mqueue.msg_max` and `fs.mqueue.msgsize_max`). Message limits are set to 10 entries with payload sizing matching the dynamic sweep scale.
+- **Limits**: Constrained by kernel sysctl limits (`fs.mqueue.msg_max` and `fs.mqueue.msgsize_max`). Message limits are set to 10 entries (`mq_maxmsg=10`) with payload sizing matching the dynamic sweep scale. **For payloads ≥ 64 KiB, the system default `fs.mqueue.msgsize_max` (typically 8 192 B) must be raised** before running: `sudo sysctl -w fs.mqueue.msgsize_max=1048688`
 - **Filesystem Node**: Message queues are tracked inside the virtual VFS tree under `/dev/mqueue`, introducing inode lock evaluation paths in the kernel.
 
 ### D. `io_uring` + Shared Memory SPSC Ring
@@ -80,7 +81,7 @@ Processor affinity is pinned statically using `sched_setaffinity` to isolate tas
 - **Consumer Core**: Pinned to CPU Core 2.
 
 ### C. Analytical Metrics
-For each message size class, the benchmark executes 1 warmup run (discarded) and measured runs. Specifically, the POSIX Pipe and UNIX Domain Sockets benchmarks use $N = 5$ measured runs, while the POSIX Message Queue (MQ) and `io_uring` Shared Ring benchmarks use $N = 15$ measured runs for statistics stabilization. The following equations define the metrics:
+For each message size class, the benchmark executes 1 warmup run (discarded) followed by $N = 15$ measured runs for all four IPC mechanisms. The following equations define the metrics:
 1. **Throughput ($T$)**: The volume of data transferred per unit time:
    $$T = \frac{B}{1024^3 \times t_{\text{exec}}} \quad (\text{GiB/s})$$
    where $B$ is the total volume target in bytes, and $t_{\text{exec}}$ is the elapsed execution wall-clock time in seconds.
@@ -226,14 +227,14 @@ python3 scripts/statistical_analysis.py
 ## VI. Quantitative Results and Analysis
 
 ### A. Throughput Scalability (`figures/throughput.png`)
-Traditional transports hit a performance ceiling at medium-to-large message sizes (64 KiB - 256 KiB) due to memory copies and kernel context transitions. By contrast, the `io_uring` Shared Ring buffer scales linearly, maintaining peak memory bandwidth throughput by keeping the execution loop entirely in userspace.
+Traditional transports hit a performance ceiling at medium-to-large message sizes (64 KiB–256 KiB) due to memory copies and kernel context transitions. The shared-memory ring achieves a peak speedup of **6.5×** over Unix Domain Sockets at 256 B and maintains a throughput lead through 256 KiB. However, at 1 MiB the ring is overtaken by Unix sockets (+14%) and POSIX MQ (+12%), because the fixed 64-slot ring depth causes producer stall when large slots cannot be recycled fast enough.
 
 ### B. Latency Distributions (`figures/latency.png`)
 - **Traditional IPCs**: Average and P99 latencies exhibit high variance (visible in wider IQR bands), caused by kernel scheduling preemptions and thread awakening states.
-- **io_uring SPSC**: Median latencies remain sub-microsecond for message sizes up to 4 KiB. The Acquire-Release barriers enforce low scheduling jitter, keeping latency curves predictable and narrow.
+- **Shared-Memory Ring**: Achieves the lowest p50 latency at 64 B (1.9 µs vs 3.3 µs for POSIX MQ, the next best) and at 256 KiB–1 MiB where slot queuing is minimal. Between 256 B and 64 KiB, POSIX MQ's `pipelined_send` kernel optimization yields lower median latency (3.8–9.2 µs) than the ring (6.1–27.2 µs). At 16–64 KiB, Unix sockets also achieve lower p50 than the ring.
 
 ### C. Cache and Memory Contention (`figures/cache_misses.png`)
-Hardware counters highlight the benefits of cache-line alignment. `io_uring`'s alignment of head/tail atomics keeps cache invalidations at zero, whereas POSIX Pipes and Unix Sockets show higher L1 Data Cache load-miss rates due to shared file-descriptor structures.
+Hardware counters highlight the structural differences between mechanisms. The shared-memory ring generates extremely high L1 load counts (~164 billion) due to its userspace spin-polling loop, with a 3.97% L1 miss rate. The `alignas(64)` cache-line isolation of `head`, `tail`, and `consumer_sleeping` prevents false sharing between producer and consumer cores — this is the primary cache benefit. Note: the perf captures are whole-benchmark totals (not per-message-size) and the POSIX MQ L1-miss counter was inactive during capture (shown as 0, not a true zero-miss result).
 
 ### D. CPU Profiling via Flamegraphs
 Profiling with `perf` confirms:

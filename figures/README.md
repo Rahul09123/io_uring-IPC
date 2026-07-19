@@ -77,12 +77,12 @@ The flamegraph SVGs located in the `flamegraphs/` subdirectory illustrate the di
   - **`pipelined_send` & `pipelined_receive`**: A specialized kernel optimization path. When a receiver is already waiting, the kernel bypasses the intermediate queue buffer and copies the message payload directly into the consumer's memory buffer, showing up as a wide memory-copy frame.
   - **Virtual Filesystem (VFS) Overheads**: Since POSIX message queues are represented as nodes under the `mqueue` virtual filesystem, file permission checks, descriptor allocation, and inode lock modifications (`mqueue_evict_inode`) occupy a visible portion of the stack.
 
-### 3.4 io_uring Shared Ring Profile (`uring_flamegraph.svg`)
-- **Visual Pattern**: Extremely shallow userspace stacks for the benchmark processes, contrasted with a separate, highly focused kernel thread polling stack.
+### 3.4 io_uring Shared Ring Profile (`uring_flamegraph.svg` / `final_io_uring.jpg`)
+- **Visual Pattern**: Extremely shallow userspace stacks for the benchmark processes, contrasted with periodic `io_uring_enter` system-call entries on the wakeup path.
 - **Key Call Stacks & Hotspots**:
   - **Lock-Free Userspace Spinloops**: The active producer and consumer processes (`uring_producer` and `uring_consumer`) spend almost their entire CPU budget executing userspace loops checking atomic index pointers. This is represented by wide, shallow frames compiling directly to `CPU_PAUSE` instructions (`_mm_pause` or assembly `yield`).
-  - **`io_sq_thread` (Kernel Thread)**: When SQPOLL is active, the kernel thread `io_sq_thread` executes on Core 3. The flamegraph captures this thread executing `io_submit_sqes` and completing NOP entries. This architecture completely isolates kernel task submissions onto Core 3, preventing system-call transitions on Core 1 and Core 2.
-  - **`io_uring_enter` (Fallback Mode)**: In environments where SQPOLL is inactive, system-call entries appear under `io_uring_enter`. However, these remain narrow compared to sockets, as the payload transfer itself bypasses the kernel, relying purely on the mapped shared memory slots (`mmap`).
+  - **`io_uring_enter` (Wakeup Signaling Path)**: The benchmark runs `io_uring` in default interrupt mode (`flags=0`, no SQPOLL). When the ring is empty, the consumer calls `io_uring_submit_and_wait` to block on an `IORING_OP_READ` from the signaling FIFO; the producer uses `io_uring_prep_write` to send a one-byte wakeup. These calls appear as narrow `io_uring_enter` entries — narrow because they only fire when the ring is empty, not on every message.
+  - **Important**: The `io_sq_thread` kernel polling thread is **not** present in these profiles because `IORING_SETUP_SQPOLL` is not enabled (`io_uring_queue_init` is called with `flags=0`). The payload itself is transferred via `memcpy` into shared memory slots with no kernel involvement.
 
 ---
 

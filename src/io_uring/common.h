@@ -8,6 +8,9 @@
 // Core assignment architecture matrix
 constexpr int PRODUCER_CORE = 1;
 constexpr int CONSUMER_CORE = 2;
+// SQPOLL_CORE is reserved for future use with IORING_SETUP_SQPOLL.
+// Currently io_uring_queue_init is called with flags=0 (default interrupt mode).
+// To enable: pass IORING_SETUP_SQPOLL | IORING_SETUP_SQ_AFF with sq_thread_cpu=SQPOLL_CORE.
 constexpr int SQPOLL_CORE = 3;
 
 constexpr size_t MESSAGE_SIZES[] = {64,    256,   1024,   4096,
