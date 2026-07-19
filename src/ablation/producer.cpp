@@ -98,8 +98,8 @@ static void run_all(RingBuffer* rb, WakeupState& ws,
 
                 produced += sz;
 
-                // Inject inter-arrival gap for non-saturated regimes
-                if (inter_arrival_us > 0)
+                // Inject inter-arrival gap per burst (every NUM_SLOTS messages)
+                if (inter_arrival_us > 0 && ((h + 1) % NUM_SLOTS == 0))
                     usleep(static_cast<useconds_t>(inter_arrival_us));
             }
             usleep(2000); // brief pause before next run
