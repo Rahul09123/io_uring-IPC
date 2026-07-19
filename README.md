@@ -212,7 +212,7 @@ sudo sysctl -w fs.mqueue.msg_max=1024
 Evaluates streaming throughput (GiB/s), CPU efficiency, and wakeup overhead across `busy_poll`, `spin_backoff`, `adaptive`, `futex`, and `io_uring` under `saturated` and `bursty` regimes:
 ```bash
 cd src/ablation
-bash run_ablation.sh --variant busy_poll --variant spin_backoff --variant adaptive --variant futex --variant io_uring --regime saturated --regime bursty
+bash run_ablation.sh --regime saturated --regime bursty
 ```
 - **Outputs**: Detailed per-variant CSV results generated in `data/ablation_*.csv`.
 

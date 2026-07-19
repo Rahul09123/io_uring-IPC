@@ -21,7 +21,7 @@ BUILD_DIR="$SCRIPT_DIR/build"
 DATA_DIR="$REPO_ROOT/data"
 FIGURES_DIR="$REPO_ROOT/figures/ablation"
 
-ALL_VARIANTS=(busy_poll spin_backoff adaptive futex eventfd io_uring)
+ALL_VARIANTS=(busy_poll spin_backoff adaptive futex io_uring)
 ALL_REGIMES=(saturated bursty offered_25 offered_50 offered_75 offered_90)
 
 SELECTED_VARIANTS=()
