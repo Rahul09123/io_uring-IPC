@@ -226,33 +226,7 @@ int main(int argc, char* argv[]) {
     if (variant == EVENTFD) {
         ws.eventfd_fd = eventfd(0, EFD_SEMAPHORE);
         if (ws.eventfd_fd < 0) { std::perror("eventfd"); return 1; }
-        // Signal eventfd fd to producer via a well-known /dev/shm file
-        char efd_path[64];
-        snprintf(efd_path, sizeof(efd_path), "/dev/shm/ablation_efd_%d",
-                 static_cast<int>(variant));
-        // Write the eventfd number so producer can open /proc/self/fd via
-        // the shared fd approach — we use a sync file instead.
-        // Simpler: we pass via a second shm integer.
-        // Easiest approach for cross-process eventfd: use a Unix socket pair
-        // or just have producer call eventfd again with same semantics and
-        // use a FIFO signal — but that defeats the point.
-        // PRACTICAL SOLUTION: producer opens /proc/<consumer_pid>/fd/<efd_fd>
-        // which requires root, OR we use a socketpair in a wrapper script.
-        // For portability we use a FIFO for efd handoff:
-        char handoff_path[64];
-        snprintf(handoff_path, sizeof(handoff_path),
-                 "/tmp/ablation_efd_handoff");
-        mkfifo(handoff_path, 0666);
-        // Write our pid+fd so producer can reconstruct
-        int hfd = open(handoff_path, O_WRONLY);
-        if (hfd < 0) { std::perror("handoff open (w)"); return 1; }
-        // We send the fd number via a short message; producer will re-use the
-        // SAME eventfd by inheriting via /proc/PID/fd symlink.
-        // Better: just pass the fd via a Unix domain socket.
-        // SIMPLEST correct approach: create the eventfd BEFORE forking in a
-        // shell script. Here we fall back to a named-pipe + dup trick:
-        // We write the eventfd fd num as text; producer reads our PID from
-        // /tmp/ablation_consumer_pid, then opens /proc/<pid>/fd/<efd_fd>.
+        // Write our pid+fd so producer can open /proc/PID/fd/EFD
         {
             char pid_file[] = "/tmp/ablation_consumer_pid";
             FILE* pf = fopen(pid_file, "w");
@@ -261,10 +235,6 @@ int main(int argc, char* argv[]) {
                 fclose(pf);
             }
         }
-        // Write a byte to unblock producer's open() on handoff FIFO
-        char dummy = 'R';
-        if (write(hfd, &dummy, 1) < 0) { /* ignore */ }
-        close(hfd);
     } else if (variant == IO_URING) {
         io_uring_queue_init(256, &ring, 0);
         mkfifo(SIGNAL_PATH, 0666);
