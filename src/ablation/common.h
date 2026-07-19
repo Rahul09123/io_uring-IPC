@@ -32,7 +32,8 @@ constexpr char EVENTFD_SOCKET_PATH[] = "/tmp/ablation_efd_socket";
 #include <unistd.h>
 
 static inline int send_fd(int sock, int fd) {
-    struct msghdr msg = {0};
+    struct msghdr msg;
+    std::memset(&msg, 0, sizeof(msg));
     char buf[CMSG_SPACE(sizeof(int))] = {0};
     
     struct iovec io = {
@@ -56,7 +57,8 @@ static inline int send_fd(int sock, int fd) {
 }
 
 static inline int recv_fd(int sock) {
-    struct msghdr msg = {0};
+    struct msghdr msg;
+    std::memset(&msg, 0, sizeof(msg));
     char ctrl_buf[CMSG_SPACE(sizeof(int))];
     char dummy_buf[64];
     

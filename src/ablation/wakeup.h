@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <liburing.h>
 #include <linux/futex.h>
+#include <poll.h>
 #include <sched.h>
 #include <sys/eventfd.h>
 #include <sys/syscall.h>
@@ -179,10 +180,12 @@ struct EventFD {
                 expected, 0, std::memory_order_seq_cst);
             return;
         }
-        uint64_t val = 0;
-        if (read(ws.eventfd_fd, &val, sizeof(val)) < 0) {
-            ::perror("EventFD consumer read failed");
+        struct pollfd pfd = { ws.eventfd_fd, POLLIN, 0 };
+        if (poll(&pfd, 1, 10) > 0) {
+            uint64_t val = 0;
+            if (read(ws.eventfd_fd, &val, sizeof(val)) < 0) { /* ignore */ }
         }
+        rb->consumer_sleeping.store(0, std::memory_order_relaxed);
     }
 
     static inline void producer_signal(RingBuffer* rb, WakeupState& ws,
@@ -194,9 +197,7 @@ struct EventFD {
                     expected, 0, std::memory_order_acq_rel)) {
                 ++(*wakeup_count);
                 uint64_t val = 1;
-                if (write(ws.eventfd_fd, &val, sizeof(val)) < 0) {
-                    ::perror("EventFD producer write failed");
-                }
+                if (write(ws.eventfd_fd, &val, sizeof(val)) < 0) { /* ignore */ }
             }
         }
     }
@@ -206,47 +207,51 @@ struct EventFD {
 // 5: IO_URING — FIFO-based wakeup via io_uring (verbatim from existing impl)
 // ─────────────────────────────────────────────────────────────────────────────
 struct IoUring {
-  static inline void consumer_wait(RingBuffer *rb, WakeupState &ws,
-                                   struct io_uring *ring, uint64_t t) {
-    rb->consumer_sleeping.store(1, std::memory_order_seq_cst);
-    if (rb->head.load(std::memory_order_seq_cst) != t) {
-      uint32_t expected = 1;
-      rb->consumer_sleeping.compare_exchange_strong(expected, 0,
-                                                    std::memory_order_seq_cst);
-      return;
-    }
-    static char sig_buf[8];
-    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    if (sqe) {
-      io_uring_prep_read(sqe, ws.fifo_fd, sig_buf, 1, 0);
-      struct io_uring_cqe *cqe;
-      if (io_uring_submit_and_wait(ring, 1) >= 0) {
-        if (io_uring_peek_cqe(ring, &cqe) == 0)
-          io_uring_cqe_seen(ring, cqe);
-      }
-    }
-  }
-
-  static inline void producer_signal(RingBuffer *rb, WakeupState &ws,
-                                     struct io_uring *ring,
-                                     uint64_t *wakeup_count) {
-    if (rb->consumer_sleeping.load(std::memory_order_seq_cst) == 1) {
-      uint32_t expected = 1;
-      if (rb->consumer_sleeping.compare_exchange_strong(
-              expected, 0, std::memory_order_acq_rel)) {
-        ++(*wakeup_count);
-        static char sig = 'W';
-        struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
-        if (sqe) {
-          io_uring_prep_write(sqe, ws.fifo_fd, &sig, 1, 0);
-          io_uring_submit(ring);
-          struct io_uring_cqe *cqe;
-          if (io_uring_wait_cqe(ring, &cqe) == 0)
-            io_uring_cqe_seen(ring, cqe);
+    static inline void consumer_wait(RingBuffer* rb, WakeupState& ws,
+                                     struct io_uring* ring, uint64_t t) {
+        rb->consumer_sleeping.store(1, std::memory_order_seq_cst);
+        if (rb->head.load(std::memory_order_seq_cst) != t) {
+            uint32_t expected = 1;
+            rb->consumer_sleeping.compare_exchange_strong(
+                expected, 0, std::memory_order_seq_cst);
+            return;
         }
-      }
+        struct pollfd pfd = { ws.fifo_fd, POLLIN, 0 };
+        if (poll(&pfd, 1, 10) > 0) {
+            static char sig_buf[8];
+            struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
+            if (sqe) {
+                io_uring_prep_read(sqe, ws.fifo_fd, sig_buf, 1, 0);
+                struct io_uring_cqe* cqe;
+                if (io_uring_submit_and_wait(ring, 1) >= 0) {
+                    if (io_uring_peek_cqe(ring, &cqe) == 0)
+                        io_uring_cqe_seen(ring, cqe);
+                }
+            }
+        }
+        rb->consumer_sleeping.store(0, std::memory_order_relaxed);
     }
-  }
+
+    static inline void producer_signal(RingBuffer* rb, WakeupState& ws,
+                                       struct io_uring* ring,
+                                       uint64_t* wakeup_count) {
+        if (rb->consumer_sleeping.load(std::memory_order_seq_cst) == 1) {
+            uint32_t expected = 1;
+            if (rb->consumer_sleeping.compare_exchange_strong(
+                    expected, 0, std::memory_order_acq_rel)) {
+                ++(*wakeup_count);
+                static char sig = 'W';
+                struct io_uring_sqe* sqe = io_uring_get_sqe(ring);
+                if (sqe) {
+                    io_uring_prep_write(sqe, ws.fifo_fd, &sig, 1, 0);
+                    io_uring_submit(ring);
+                    struct io_uring_cqe* cqe;
+                    if (io_uring_wait_cqe(ring, &cqe) == 0)
+                        io_uring_cqe_seen(ring, cqe);
+                }
+            }
+        }
+    }
 };
 
 } // namespace wakeup
