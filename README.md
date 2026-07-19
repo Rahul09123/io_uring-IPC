@@ -187,40 +187,44 @@ All benchmark runs and profiling tasks were executed on a dedicated test machine
 
 ## V. Execution and Reproducibility
 
-### A. System Configuration Check
-Ensure compile tools, shared library symbols, and runtime packages are installed:
+### A. System Configuration & Dependencies
+Ensure compiler toolchains, `liburing`, and visualization dependencies are installed:
 ```bash
-# Ubuntu/Debian dependencies
-sudo apt-get update
-sudo apt-get install -y build-essential liburing-dev python3-matplotlib python3-scipy perf-tools-unstable
+# Install core build tools, liburing, and plotting libraries
+sudo apt update
+sudo apt install -y build-essential g++ liburing-dev python3 python3-matplotlib python3-numpy linux-tools-common linux-tools-$(uname -r)
 ```
 
-### B. Benchmark Execution
-Compile and run the benchmarks sequentially from their folders, and copy their output CSV files to the `data/` directory for visualization processing:
-
+### B. Hardware & Kernel Optimizations
+Before executing benchmarks, apply system tuning to guarantee maximum measurement accuracy and eliminate kernel backpressure limits:
 ```bash
-# 1. Run POSIX Pipe Benchmark
-cd src/pipe && bash run_pipe_bench.sh && cp -f pipe_results.csv ../../data/ && cd ../..
+# 1. Lock CPU frequency to maximum performance (eliminates CPU frequency scaling latency spikes)
+sudo cpupower frequency-set -g performance
 
-# 2. Run UNIX Domain Sockets Benchmark
-cd src/sockets && bash run_socket_bench.sh && cp -f socket_results.csv ../../data/ && cd ../..
-
-# 3. Run POSIX Message Queue Benchmark
-cd src/mq && bash run_mq_bench.sh && cp -f mq_results.csv ../../data/ && cd ../..
-
-# 4. Run io_uring Benchmark
-cd src/io_uring && bash run_uring_bench.sh && cp -f io_uring_results.csv ../../data/ && cd ../..
+# 2. Increase maximum POSIX Message Queue payload limits to 1 MiB
+sudo sysctl -w fs.mqueue.msgsize_max=1048576
+sudo sysctl -w fs.mqueue.msg_max=1024
 ```
 
-### C. Visualizations & Statistical Validation
-Once all baseline datasets are populated under `data/`, run the analysis scripts from the repository root:
-```bash
-# Process CSV data and generate plots under figures/
-python3 scripts/generate_visualizations.py
+### C. Benchmark Execution Workflow
 
-# Run statistical analysis and output report figures/statistical_analysis.md
-python3 scripts/statistical_analysis.py
+#### 1. Benchmark Suite #1: Ablation Study (Throughput & Wakeup Mechanisms)
+Evaluates streaming throughput (GiB/s), CPU efficiency, and wakeup overhead across `busy_poll`, `spin_backoff`, `adaptive`, `futex`, and `io_uring` under `saturated` and `bursty` regimes:
+```bash
+cd src/ablation
+bash run_ablation.sh --variant busy_poll --variant spin_backoff --variant adaptive --variant futex --variant io_uring --regime saturated --regime bursty
 ```
+- **Outputs**: Detailed per-variant CSV results generated in `data/ablation_*.csv`.
+
+#### 2. Benchmark Suite #2: Ping-Pong Latency & Publication Plots
+Evaluates true depth-1 unloaded round-trip latency ($L = \text{RTT} / 2$) and tail percentiles (P50, P90, P99, P99.9) across Pipes, UNIX Sockets, POSIX Message Queues, and Shared Memory + `io_uring`:
+```bash
+cd ../pingpong
+bash run_pingpong.sh
+```
+- **Outputs**: 
+  - Merged datasets in `data/pingpong_results.csv` and `data/pingpong_*_summary.csv`.
+  - Publication-ready charts saved automatically in `figures/pingpong/` (e.g., `fig_A_*.png`, `fig_B_*.png`).
 
 ---
 
