@@ -96,8 +96,7 @@ static void chan_read(PPChan* ch, char* buf, size_t sz,
             continue;
 
         case SPIN_BACKOFF:
-            PP_PAUSE();
-            if ((spins++ & 63) == 63) sched_yield();
+            for (int i = 0; i < 8; ++i) PP_PAUSE();
             continue;
 
         case ADAPTIVE:
