@@ -209,7 +209,7 @@ sudo sysctl -w fs.mqueue.msg_max=1024
 ### C. Benchmark Execution Workflow
 
 #### 1. Benchmark Suite #1: Ablation Study (Throughput & Wakeup Mechanisms)
-Evaluates streaming throughput (GiB/s), CPU efficiency, and wakeup overhead across `busy_poll`, `spin_backoff`, `adaptive`, `futex`, and `io_uring` under `saturated` and `bursty` regimes:
+Evaluates streaming throughput (GiB/s), CPU efficiency, and wakeup overhead across 5 wakeup variants (`busy_poll`, `spin_backoff`, `adaptive`, `futex`, and `io_uring`) under `saturated` and `bursty` regimes:
 ```bash
 cd src/ablation
 bash run_ablation.sh --regime saturated --regime bursty
