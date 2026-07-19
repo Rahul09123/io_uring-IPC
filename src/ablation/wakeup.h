@@ -169,33 +169,36 @@ struct FutexWakeup {
 // 4: EVENTFD — blocking read/write on an eventfd
 // ─────────────────────────────────────────────────────────────────────────────
 struct EventFD {
-  static inline void consumer_wait(RingBuffer *rb, WakeupState &ws,
-                                   struct io_uring * /*ring*/, uint64_t t) {
-    rb->consumer_sleeping.store(1, std::memory_order_seq_cst);
-    if (rb->head.load(std::memory_order_seq_cst) != t) {
-      uint32_t expected = 1;
-      rb->consumer_sleeping.compare_exchange_strong(expected, 0,
-                                                    std::memory_order_seq_cst);
-      return;
+    static inline void consumer_wait(RingBuffer* rb, WakeupState& ws,
+                                     struct io_uring* /*ring*/, uint64_t t) {
+        rb->consumer_sleeping.store(1, std::memory_order_seq_cst);
+        if (rb->head.load(std::memory_order_seq_cst) != t) {
+            uint32_t expected = 1;
+            rb->consumer_sleeping.compare_exchange_strong(
+                expected, 0, std::memory_order_seq_cst);
+            return;
+        }
+        uint64_t val = 0;
+        if (read(ws.eventfd_fd, &val, sizeof(val)) < 0) {
+            std::perror("EventFD consumer read failed");
+        }
     }
-    uint64_t val = 0;
-    if (read(ws.eventfd_fd, &val, sizeof(val)) < 0) { /* ignore */
-    }
-  }
 
-  static inline void producer_signal(RingBuffer *rb, WakeupState &ws,
-                                     struct io_uring * /*ring*/,
-                                     uint64_t *wakeup_count) {
-    if (rb->consumer_sleeping.load(std::memory_order_seq_cst) == 1) {
-      uint32_t expected = 1;
-      if (rb->consumer_sleeping.compare_exchange_strong(
-              expected, 0, std::memory_order_acq_rel)) {
-        ++(*wakeup_count);
-        uint64_t val = 1;
-        (void)write(ws.eventfd_fd, &val, sizeof(val));
-      }
+    static inline void producer_signal(RingBuffer* rb, WakeupState& ws,
+                                       struct io_uring* /*ring*/,
+                                       uint64_t* wakeup_count) {
+        if (rb->consumer_sleeping.load(std::memory_order_seq_cst) == 1) {
+            uint32_t expected = 1;
+            if (rb->consumer_sleeping.compare_exchange_strong(
+                    expected, 0, std::memory_order_acq_rel)) {
+                ++(*wakeup_count);
+                uint64_t val = 1;
+                if (write(ws.eventfd_fd, &val, sizeof(val)) < 0) {
+                    std::perror("EventFD producer write failed");
+                }
+            }
+        }
     }
-  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
