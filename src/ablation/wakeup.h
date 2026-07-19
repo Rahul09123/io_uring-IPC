@@ -53,6 +53,8 @@ static inline uint64_t wakeup_now_ns() {
         std::chrono::high_resolution_clock::now().time_since_epoch().count());
 }
 
+namespace wakeup {
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 0: BUSY_POLL
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,5 +240,7 @@ namespace IoUring {
         }
     }
 }
+
+} // namespace wakeup
 
 #endif // ABLATION_WAKEUP_H
