@@ -112,12 +112,12 @@ static void dispatch(WakeupVariant v, RingBuffer* rb, WakeupState& ws,
                      struct io_uring* ring,
                      Regime regime, const char* regime_name) {
     switch (v) {
-    case BUSY_POLL:    run_all<BusyPoll>   (rb, ws, ring, regime, regime_name); break;
-    case SPIN_BACKOFF: run_all<SpinBackoff>(rb, ws, ring, regime, regime_name); break;
-    case ADAPTIVE:     run_all<Adaptive>   (rb, ws, ring, regime, regime_name); break;
-    case FUTEX:        run_all<FutexWakeup>(rb, ws, ring, regime, regime_name); break;
-    case EVENTFD:      run_all<EventFD>    (rb, ws, ring, regime, regime_name); break;
-    case IO_URING:     run_all<IoUring>    (rb, ws, ring, regime, regime_name); break;
+    case BUSY_POLL:    run_all<wakeup::BusyPoll>   (rb, ws, ring, regime, regime_name); break;
+    case SPIN_BACKOFF: run_all<wakeup::SpinBackoff>(rb, ws, ring, regime, regime_name); break;
+    case ADAPTIVE:     run_all<wakeup::Adaptive>   (rb, ws, ring, regime, regime_name); break;
+    case FUTEX:        run_all<wakeup::FutexWakeup>(rb, ws, ring, regime, regime_name); break;
+    case EVENTFD:      run_all<wakeup::EventFD>    (rb, ws, ring, regime, regime_name); break;
+    case IO_URING:     run_all<wakeup::IoUring>    (rb, ws, ring, regime, regime_name); break;
     }
 }
 

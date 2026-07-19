@@ -180,12 +180,12 @@ static Stats dispatch(WakeupVariant v,
                       struct io_uring* ring,
                       size_t msg_sz, Telemetry& tel) {
     switch (v) {
-    case BUSY_POLL:    return run_one<BusyPoll>   (rb, ws, ring, msg_sz, tel);
-    case SPIN_BACKOFF: return run_one<SpinBackoff> (rb, ws, ring, msg_sz, tel);
-    case ADAPTIVE:     return run_one<Adaptive>    (rb, ws, ring, msg_sz, tel);
-    case FUTEX:        return run_one<FutexWakeup> (rb, ws, ring, msg_sz, tel);
-    case EVENTFD:      return run_one<EventFD>     (rb, ws, ring, msg_sz, tel);
-    case IO_URING:     return run_one<IoUring>     (rb, ws, ring, msg_sz, tel);
+    case BUSY_POLL:    return run_one<wakeup::BusyPoll>   (rb, ws, ring, msg_sz, tel);
+    case SPIN_BACKOFF: return run_one<wakeup::SpinBackoff> (rb, ws, ring, msg_sz, tel);
+    case ADAPTIVE:     return run_one<wakeup::Adaptive>    (rb, ws, ring, msg_sz, tel);
+    case FUTEX:        return run_one<wakeup::FutexWakeup> (rb, ws, ring, msg_sz, tel);
+    case EVENTFD:      return run_one<wakeup::EventFD>     (rb, ws, ring, msg_sz, tel);
+    case IO_URING:     return run_one<wakeup::IoUring>     (rb, ws, ring, msg_sz, tel);
     }
     return {};
 }
@@ -263,7 +263,7 @@ int main(int argc, char* argv[]) {
         }
         // Write a byte to unblock producer's open() on handoff FIFO
         char dummy = 'R';
-        (void)write(hfd, &dummy, 1);
+        if (write(hfd, &dummy, 1) < 0) { /* ignore */ }
         close(hfd);
     } else if (variant == IO_URING) {
         io_uring_queue_init(256, &ring, 0);
