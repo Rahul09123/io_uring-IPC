@@ -52,8 +52,7 @@ variant_to_int() {
         spin_backoff) echo 1;;
         adaptive)     echo 2;;
         futex)        echo 3;;
-        eventfd)      echo 4;;
-        io_uring)     echo 5;;
+        io_uring)     echo 4;;
         *) echo "Unknown variant: $1" >&2; exit 1;;
     esac
 }

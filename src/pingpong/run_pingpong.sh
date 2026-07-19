@@ -29,7 +29,7 @@ DATA_DIR="$REPO_ROOT/data"
 FIGURES_DIR="$REPO_ROOT/figures/pingpong"
 
 ALL_IPCS=(pipe unix_socket shm_io_uring posix_mq shm_ablation)
-ALL_VARIANTS=(0 1 2 3 5)  # variant integers for pp_ablation (excluding eventfd)
+ALL_VARIANTS=(0 1 2 3 4)  # variant integers for pp_ablation (0=busy_poll, 1=spin_backoff, 2=adaptive, 3=futex, 4=io_uring)
 VARIANT_NAMES=(busy_poll spin_backoff adaptive futex io_uring)
 
 SELECTED_IPCS=()

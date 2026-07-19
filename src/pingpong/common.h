@@ -49,7 +49,7 @@ constexpr const char* IPC_TYPE_NAMES[] = {
     "pipe", "unix_socket", "shm_io_uring", "posix_mq"
 };
 constexpr const char* WAKEUP_VARIANT_NAMES[] = {
-    "busy_poll", "spin_backoff", "adaptive", "futex", "eventfd", "io_uring"
+    "busy_poll", "spin_backoff", "adaptive", "futex", "io_uring"
 };
 
 // ── CSV headers ───────────────────────────────────────────────────────────────
