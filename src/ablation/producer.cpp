@@ -170,26 +170,28 @@ int main(int argc, char* argv[]) {
     struct io_uring ring{};
 
     if (variant == EVENTFD) {
-        // Read consumer's PID + fd from the pid file
-        const char* pid_file = "/tmp/ablation_consumer_pid";
+        int sock_fd = -1;
+        struct sockaddr_un addr{};
+        addr.sun_family = AF_UNIX;
+        std::strncpy(addr.sun_path, EVENTFD_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+        
+        // Retry connection until consumer establishes listener
         for (int retry = 0; retry < 30; ++retry) {
-            FILE* pf = fopen(pid_file, "r");
-            if (pf) {
-                int cpid = 0, cfd = 0;
-                if (fscanf(pf, "%d %d", &cpid, &cfd) == 2) {
-                    fclose(pf);
-                    char fd_path[128];
-                    snprintf(fd_path, sizeof(fd_path),
-                             "/proc/%d/fd/%d", cpid, cfd);
-                    ws.eventfd_fd = open(fd_path, O_RDWR);
-                    if (ws.eventfd_fd >= 0) break;
-                } else {
-                    fclose(pf);
+            sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+            if (sock_fd >= 0) {
+                if (connect(sock_fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
+                    break;
                 }
+                close(sock_fd);
+                sock_fd = -1;
             }
             usleep(100000);
         }
-        if (ws.eventfd_fd < 0) { std::perror("open eventfd via /proc"); return 1; }
+        if (sock_fd < 0) { std::perror("connect eventfd socket"); return 1; }
+        
+        ws.eventfd_fd = recv_fd(sock_fd);
+        close(sock_fd);
+        if (ws.eventfd_fd < 0) { std::perror("recv_fd eventfd"); return 1; }
     } else if (variant == IO_URING) {
         if (io_uring_queue_init(64, &ring, 0) < 0) {
             std::perror("io_uring_queue_init"); return 1;

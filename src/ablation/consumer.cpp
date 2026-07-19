@@ -226,15 +226,35 @@ int main(int argc, char* argv[]) {
     if (variant == EVENTFD) {
         ws.eventfd_fd = eventfd(0, EFD_SEMAPHORE);
         if (ws.eventfd_fd < 0) { std::perror("eventfd"); return 1; }
-        // Write our pid+fd so producer can open /proc/PID/fd/EFD
-        {
-            char pid_file[] = "/tmp/ablation_consumer_pid";
-            FILE* pf = fopen(pid_file, "w");
-            if (pf) {
-                fprintf(pf, "%d %d\n", getpid(), ws.eventfd_fd);
-                fclose(pf);
-            }
+        
+        unlink(EVENTFD_SOCKET_PATH);
+        int listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (listen_fd < 0) { std::perror("socket"); return 1; }
+        
+        struct sockaddr_un addr{};
+        addr.sun_family = AF_UNIX;
+        std::strncpy(addr.sun_path, EVENTFD_SOCKET_PATH, sizeof(addr.sun_path) - 1);
+        
+        if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+            std::perror("bind"); close(listen_fd); return 1;
         }
+        
+        if (listen(listen_fd, 1) < 0) {
+            std::perror("listen"); close(listen_fd); return 1;
+        }
+        
+        int conn_fd = accept(listen_fd, nullptr, nullptr);
+        if (conn_fd < 0) {
+            std::perror("accept"); close(listen_fd); return 1;
+        }
+        
+        if (send_fd(conn_fd, ws.eventfd_fd) < 0) {
+            std::perror("send_fd");
+        }
+        
+        close(conn_fd);
+        close(listen_fd);
+        unlink(EVENTFD_SOCKET_PATH);
     } else if (variant == IO_URING) {
         io_uring_queue_init(256, &ring, 0);
         mkfifo(SIGNAL_PATH, 0666);

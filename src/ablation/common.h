@@ -22,8 +22,63 @@ constexpr size_t MAX_PAYLOAD     = 1048576;               // 1 MB
 constexpr size_t MAX_LAT_SAMPLES = 4 * 1024 * 1024;
 
 // ── Shared-memory / FIFO names ────────────────────────────────────────────────
-constexpr char SHM_RING_NAME[] = "/ipc_ablation_ring";
-constexpr char SIGNAL_PATH[]   = "/tmp/ablation_sig_fifo";
+constexpr char SHM_RING_NAME[]      = "/ipc_ablation_ring";
+constexpr char SIGNAL_PATH[]        = "/tmp/ablation_sig_fifo";
+constexpr char EVENTFD_SOCKET_PATH[] = "/tmp/ablation_efd_socket";
+
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <cstring>
+#include <unistd.h>
+
+static inline int send_fd(int sock, int fd) {
+    struct msghdr msg = {0};
+    char buf[CMSG_SPACE(sizeof(int))] = {0};
+    
+    struct iovec io = {
+        .iov_base = const_cast<char*>("F"),
+        .iov_len = 1
+    };
+    
+    msg.msg_iov = &io;
+    msg.msg_iovlen = 1;
+    msg.msg_control = buf;
+    msg.msg_controllen = sizeof(buf);
+    
+    struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    
+    std::memcpy(CMSG_DATA(cmsg), &fd, sizeof(int));
+    
+    return static_cast<int>(sendmsg(sock, &msg, 0));
+}
+
+static inline int recv_fd(int sock) {
+    struct msghdr msg = {0};
+    char ctrl_buf[CMSG_SPACE(sizeof(int))];
+    char dummy_buf[64];
+    
+    struct iovec io = {
+        .iov_base = dummy_buf,
+        .iov_len = sizeof(dummy_buf)
+    };
+    
+    msg.msg_iov = &io;
+    msg.msg_iovlen = 1;
+    msg.msg_control = ctrl_buf;
+    msg.msg_controllen = sizeof(ctrl_buf);
+    
+    if (recvmsg(sock, &msg, 0) < 0) return -1;
+    
+    struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+    if (!cmsg || cmsg->cmsg_type != SCM_RIGHTS) return -1;
+    
+    int fd = -1;
+    std::memcpy(&fd, CMSG_DATA(cmsg), sizeof(int));
+    return fd;
+}
 
 // ── Adaptive-spin threshold ───────────────────────────────────────────────────
 constexpr int ADAPTIVE_SPIN_ITERS = 500;
