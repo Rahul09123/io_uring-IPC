@@ -47,12 +47,12 @@ struct alignas(64) PPChan {
 // ── futex helpers ─────────────────────────────────────────────────────────────
 static int futex_wait(uint32_t* addr, uint32_t val) {
     return static_cast<int>(
-        syscall(SYS_futex, addr, FUTEX_WAIT | FUTEX_PRIVATE_FLAG,
+        syscall(SYS_futex, addr, FUTEX_WAIT,
                 val, nullptr, nullptr, 0));
 }
 static int futex_wake(uint32_t* addr, int n) {
     return static_cast<int>(
-        syscall(SYS_futex, addr, FUTEX_WAKE | FUTEX_PRIVATE_FLAG,
+        syscall(SYS_futex, addr, FUTEX_WAKE,
                 n, nullptr, nullptr, 0));
 }
 
