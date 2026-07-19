@@ -63,11 +63,11 @@ static void run_all(RingBuffer* rb, WakeupState& ws,
 
         for (int run = 0; run <= NUM_RUNS; ++run) {
             // ── Sync barrier: wait for consumer to reset head=0 tail=0 ────────
-            int spin = 0;
+            int retries = 0;
             while (rb->head.load(std::memory_order_acquire) != 0 ||
                    rb->tail.load(std::memory_order_acquire) != 0) {
-                CPU_PAUSE();
-                if (++spin > 10000000) {
+                usleep(100);
+                if (++retries > 100000) { // 10s timeout
                     std::cerr << "[Producer] TIMEOUT waiting for sync barrier!\n";
                     return;
                 }
