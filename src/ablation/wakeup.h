@@ -19,6 +19,7 @@
 #include "ring.h"
 
 #include <atomic>
+#include <cstdio>
 #include <cstdint>
 #include <liburing.h>
 #include <linux/futex.h>
