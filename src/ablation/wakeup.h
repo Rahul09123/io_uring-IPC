@@ -58,7 +58,7 @@ namespace wakeup {
 // ─────────────────────────────────────────────────────────────────────────────
 // 0: BUSY_POLL
 // ─────────────────────────────────────────────────────────────────────────────
-namespace BusyPoll {
+struct BusyPoll {
     static inline void consumer_wait(RingBuffer* /*rb*/, WakeupState& /*ws*/,
                                      struct io_uring* /*ring*/, uint64_t /*t*/) {
         // caller should re-check the ring immediately — nothing to do here
@@ -68,12 +68,12 @@ namespace BusyPoll {
                                        uint64_t* /*wakeup_count*/) {
         // no signaling needed — consumer never sleeps
     }
-}
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1: SPIN_BACKOFF — spin + _mm_pause + exponential backoff + sched_yield
 // ─────────────────────────────────────────────────────────────────────────────
-namespace SpinBackoff {
+struct SpinBackoff {
     static inline void consumer_wait(RingBuffer* /*rb*/, WakeupState& /*ws*/,
                                      struct io_uring* /*ring*/, uint64_t /*t*/) {
         // caller is in a tight loop; just emit a pause hint
@@ -84,14 +84,14 @@ namespace SpinBackoff {
                                        uint64_t* /*wakeup_count*/) {
         // no explicit signal — consumer spins
     }
-}
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2: ADAPTIVE — spin N iterations, then fall back to futex
 // ─────────────────────────────────────────────────────────────────────────────
-namespace Adaptive {
+struct Adaptive {
     // thread-local spin counter (reset per empty-ring episode)
-    static thread_local int spin_count = 0;
+    static thread_local int spin_count;
 
     static inline void consumer_wait(RingBuffer* rb, WakeupState& /*ws*/,
                                      struct io_uring* /*ring*/, uint64_t t) {
@@ -126,12 +126,13 @@ namespace Adaptive {
             }
         }
     }
-}
+};
+inline thread_local int Adaptive::spin_count = 0;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3: FUTEX — direct futex(FUTEX_WAIT) / futex(FUTEX_WAKE)
 // ─────────────────────────────────────────────────────────────────────────────
-namespace FutexWakeup {
+struct FutexWakeup {
     static inline void consumer_wait(RingBuffer* rb, WakeupState& /*ws*/,
                                      struct io_uring* /*ring*/, uint64_t t) {
         rb->consumer_sleeping.store(1, std::memory_order_seq_cst);
@@ -159,13 +160,13 @@ namespace FutexWakeup {
             }
         }
     }
-}
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 4: EVENTFD — blocking read/write on an eventfd
 // ─────────────────────────────────────────────────────────────────────────────
 #include <sys/eventfd.h>
-namespace EventFD {
+struct EventFD {
     static inline void consumer_wait(RingBuffer* rb, WakeupState& ws,
                                      struct io_uring* /*ring*/, uint64_t t) {
         rb->consumer_sleeping.store(1, std::memory_order_seq_cst);
@@ -192,12 +193,12 @@ namespace EventFD {
             }
         }
     }
-}
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 5: IO_URING — FIFO-based wakeup via io_uring (verbatim from existing impl)
 // ─────────────────────────────────────────────────────────────────────────────
-namespace IoUring {
+struct IoUring {
     static inline void consumer_wait(RingBuffer* rb, WakeupState& ws,
                                      struct io_uring* ring, uint64_t t) {
         rb->consumer_sleeping.store(1, std::memory_order_seq_cst);
@@ -239,7 +240,7 @@ namespace IoUring {
             }
         }
     }
-}
+};
 
 } // namespace wakeup
 
