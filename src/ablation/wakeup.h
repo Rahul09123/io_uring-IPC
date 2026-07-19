@@ -25,6 +25,7 @@
 #include <sys/syscall.h>
 #include <sched.h>
 #include <liburing.h>
+#include <sys/eventfd.h>
 
 // arch-specific pause
 #if defined(__x86_64__) || defined(__i386__)
@@ -165,7 +166,6 @@ struct FutexWakeup {
 // ─────────────────────────────────────────────────────────────────────────────
 // 4: EVENTFD — blocking read/write on an eventfd
 // ─────────────────────────────────────────────────────────────────────────────
-#include <sys/eventfd.h>
 struct EventFD {
     static inline void consumer_wait(RingBuffer* rb, WakeupState& ws,
                                      struct io_uring* /*ring*/, uint64_t t) {
@@ -177,7 +177,7 @@ struct EventFD {
             return;
         }
         uint64_t val = 0;
-        (void)read(ws.eventfd_fd, &val, sizeof(val));
+        if (read(ws.eventfd_fd, &val, sizeof(val)) < 0) { /* ignore */ }
     }
 
     static inline void producer_signal(RingBuffer* rb, WakeupState& ws,
