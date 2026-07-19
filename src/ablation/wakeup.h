@@ -180,7 +180,7 @@ struct EventFD {
         }
         uint64_t val = 0;
         if (read(ws.eventfd_fd, &val, sizeof(val)) < 0) {
-            std::perror("EventFD consumer read failed");
+            ::perror("EventFD consumer read failed");
         }
     }
 
@@ -194,7 +194,7 @@ struct EventFD {
                 ++(*wakeup_count);
                 uint64_t val = 1;
                 if (write(ws.eventfd_fd, &val, sizeof(val)) < 0) {
-                    std::perror("EventFD producer write failed");
+                    ::perror("EventFD producer write failed");
                 }
             }
         }
