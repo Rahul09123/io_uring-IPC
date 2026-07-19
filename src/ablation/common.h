@@ -12,7 +12,11 @@ constexpr int CONSUMER_CORE = 2;
 constexpr size_t MESSAGE_SIZES[] = {64, 256, 1024, 4096,
                                     16384, 65536, 262144, 1048576};
 constexpr int    NUM_RUNS        = 15;
-constexpr size_t TOTAL_BYTES     = 512ULL * 1024 * 1024;  // 512 MB (faster sweep)
+static inline size_t get_total_bytes(size_t msg_sz) {
+    if (msg_sz <= 1024)     return 16ULL * 1024 * 1024;  // 16 MB (fast sweep for small messages)
+    if (msg_sz <= 65536)    return 128ULL * 1024 * 1024; // 128 MB
+    return 512ULL * 1024 * 1024;                        // 512 MB for large messages
+}
 constexpr size_t NUM_SLOTS       = 64;
 constexpr size_t MAX_PAYLOAD     = 1048576;               // 1 MB
 constexpr size_t MAX_LAT_SAMPLES = 4 * 1024 * 1024;

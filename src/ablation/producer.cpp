@@ -76,7 +76,7 @@ static void run_all(RingBuffer* rb, WakeupState& ws,
             size_t produced = 0;
             uint64_t wakeup_count = 0;
 
-            while (produced < TOTAL_BYTES) {
+            while (produced < get_total_bytes(sz)) {
                 uint64_t h = rb->head.load(std::memory_order_relaxed);
                 uint64_t t = rb->tail.load(std::memory_order_acquire);
 

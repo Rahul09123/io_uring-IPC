@@ -83,7 +83,7 @@ static Stats compute_stats(Telemetry& tel, size_t msg_sz) {
     s.p999_us   = percentile(lats, 99.9);
 
     // throughput
-    size_t num_msgs = TOTAL_BYTES / msg_sz;
+    size_t num_msgs = get_total_bytes(msg_sz) / msg_sz;
     s.throughput_gbps =
         (static_cast<double>(num_msgs) * msg_sz / (1024.0 * 1024.0 * 1024.0))
         / tel.execution_time_sec;
@@ -114,7 +114,7 @@ static Stats run_one(RingBuffer* rb, WakeupState& ws,
     rb->consumer_sleeping.store(0, std::memory_order_relaxed);
 
     size_t   consumed  = 0;
-    size_t   num_msgs  = TOTAL_BYTES / msg_sz;
+    size_t   num_msgs  = get_total_bytes(msg_sz) / msg_sz;
     uint64_t lat_idx   = 0;
     uint64_t wl_idx    = 0;
     uint64_t wakeups   = 0;
@@ -122,7 +122,7 @@ static Stats run_one(RingBuffer* rb, WakeupState& ws,
     double cpu_start = cpu_time_sec();
     auto   wall_start = std::chrono::high_resolution_clock::now();
 
-    while (consumed < TOTAL_BYTES) {
+    while (consumed < get_total_bytes(msg_sz)) {
         uint64_t t = rb->tail.load(std::memory_order_relaxed);
         uint64_t h = rb->head.load(std::memory_order_acquire);
 
