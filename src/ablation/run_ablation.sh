@@ -21,7 +21,7 @@ BUILD_DIR="$SCRIPT_DIR/build"
 DATA_DIR="$REPO_ROOT/data"
 FIGURES_DIR="$REPO_ROOT/figures/ablation"
 
-ALL_VARIANTS=(busy_poll spin_backoff adaptive futex io_uring)
+ALL_VARIANTS=(busy_poll spin_backoff adaptive futex eventfd io_uring)
 ALL_REGIMES=(saturated bursty offered_25 offered_50 offered_75 offered_90)
 
 SELECTED_VARIANTS=()
@@ -52,7 +52,8 @@ variant_to_int() {
         spin_backoff) echo 1;;
         adaptive)     echo 2;;
         futex)        echo 3;;
-        io_uring)     echo 4;;
+        eventfd)      echo 4;;
+        io_uring)     echo 5;;
         *) echo "Unknown variant: $1" >&2; exit 1;;
     esac
 }

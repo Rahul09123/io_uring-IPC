@@ -78,7 +78,7 @@ static void uring_wait_pp(struct io_uring* ring, int fifo_fd) {
 
 // ── Wakeup variant enum ───────────────────────────────────────────────────────
 enum Variant { BUSY_POLL=0, SPIN_BACKOFF=1, ADAPTIVE=2,
-               FUTEX=3, IO_URING=4 };
+               FUTEX=3, EVENTFD=4, IO_URING=5 };
 
 // ── Generic channel read — blocks until ready=1 ──────────────────────────────
 static void chan_read(PPChan* ch, char* buf, size_t sz,

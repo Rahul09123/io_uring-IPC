@@ -99,12 +99,13 @@ enum WakeupVariant : int {
     SPIN_BACKOFF = 1,
     ADAPTIVE     = 2,
     FUTEX        = 3,
-    IO_URING     = 4,
+    EVENTFD      = 4,
+    IO_URING     = 5,
 };
 constexpr const char* VARIANT_NAMES[] = {
-    "busy_poll", "spin_backoff", "adaptive", "futex", "io_uring"
+    "busy_poll", "spin_backoff", "adaptive", "futex", "eventfd", "io_uring"
 };
-constexpr int NUM_VARIANTS = 5;
+constexpr int NUM_VARIANTS = 6;
 
 // ── Arrival regimes ───────────────────────────────────────────────────────────
 enum Regime : int {
