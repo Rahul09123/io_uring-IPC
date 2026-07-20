@@ -219,6 +219,11 @@ int main(int argc, char* argv[]) {
              PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0));
     if (rb == MAP_FAILED) { std::perror("mmap"); return 1; }
 
+    // Initialize head and tail to non-zero to force producer to wait in the
+    // sync barrier until consumer is fully ready and has entered run_one().
+    rb->head.store(0xFFFFFFFFFFFFFFFFULL, std::memory_order_relaxed);
+    rb->tail.store(0xFFFFFFFFFFFFFFFFULL, std::memory_order_relaxed);
+
     // ── WakeupState setup ────────────────────────────────────────────────────
     WakeupState ws;
     struct io_uring ring{};
