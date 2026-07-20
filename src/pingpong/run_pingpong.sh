@@ -105,7 +105,7 @@ echo ""
 echo "================================================"
 echo "  Step 2: Running IPC ping-pong benchmarks"
 echo "================================================"
-cd "$DATA_DIR"
+cd "$REPO_ROOT"
 
 for ipc in "${SELECTED_IPCS[@]}"; do
     case "$ipc" in
