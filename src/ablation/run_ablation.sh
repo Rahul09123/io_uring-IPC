@@ -110,7 +110,7 @@ for v in "${VARIANTS[@]}"; do
         if [[ $USE_PERF -eq 1 ]]; then
             # consumer under perf stat
             perf stat -e syscalls:sys_enter_futex,syscalls:sys_enter_read,\
-syscalls:sys_enter_write,context-switches \
+syscalls:sys_enter_write,context-switches,L1-dcache-loads,L1-dcache-load-misses,LLC-loads,LLC-load-misses \
                 -o /tmp/ablation_perf_tmp.txt -- \
                 "$BUILD_DIR/ablation_consumer" "$V_INT" "$CSV_OUT" &
         else
