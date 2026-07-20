@@ -9,10 +9,10 @@ Modern concurrent systems increasingly shift toward decoupled, microservices-bas
 This paper presents a comprehensive empirical evaluation comparing traditional kernel-mediated IPC mechanisms against a lock-free, cache-aligned **Shared Memory Ring Buffer with `io_uring`-assisted out-of-band wakeup coordination**. The hot data path moves through POSIX shared memory (`/dev/shm`) via Single-Producer Single-Consumer (SPSC) atomic indexing (`head` and `tail`), keeping payload transfers entirely in userspace. Out-of-band wakeup notifications are managed asynchronously via `io_uring` ring submission queues. 
 
 Our evaluation includes a **Two-Suite Experimental Methodology**:
-1. **Ablation Study**: Evaluates 5 distinct wakeup strategies (`busy_poll`, `spin_backoff`, `adaptive`, `futex`, `io_uring`) under both **`saturated`** (streaming throughput) and **`bursty`** (intermittent arrival) traffic regimes across an exponential payload sweep ($64\text{ B}$ to $1\text{ MiB}$).
+1. **Ablation Study**: Evaluates 6 distinct wakeup strategies (`busy_poll`, `spin_backoff`, `adaptive`, `futex`, `eventfd`, `io_uring`) under both **`saturated`** (streaming throughput) and **`bursty`** (intermittent arrival) traffic regimes across an exponential payload sweep ($64\text{ B}$ to $1\text{ MiB}$).
 2. **Ping-Pong Latency Suite**: Enforces a strict **Queue Depth = 1** request-response protocol with single-clock `CLOCK_MONOTONIC_RAW` sampling on a pinned core to eliminate queue backlog delay and cross-core hardware TSC clock drift, measuring exact median (P50), P90, P99, and P99.9 tail percentiles.
 
-Empirical results demonstrate that shared-memory ring buffers achieve sub-microsecond median latencies (**208 nanoseconds** at 64 B with `busy_poll`) and up to **6.5×** throughput improvements over kernel-mediated baselines, while `io_uring` and `futex` wakeups provide 0% idle CPU utilization with sub-15µs wakeup latencies.
+Empirical results demonstrate that shared-memory ring buffers achieve sub-microsecond median latencies (**208 nanoseconds** at 64 B with `busy_poll`) and up to **6.5×** throughput improvements over kernel-mediated baselines, while `io_uring`, `futex`, and `eventfd` wakeups provide 0% idle CPU utilization with sub-15µs wakeup latencies.
 
 ---
 
@@ -61,7 +61,7 @@ The shared-memory ring buffer maps a cache-aligned `RingBuffer` struct into POSI
 - **Sequential Consistency Barriers**: Atomic operations use `std::memory_order_seq_cst` to prevent store-load CPU instruction reordering.
 - **Out-of-Band Wakeup Coordination**: An atomic flag `consumer_sleeping` tracks whether the consumer thread is active or asleep. Wakeup signals are issued only when `consumer_sleeping == 1`, avoiding unnecessary kernel syscalls during active streaming.
 
-### B. The 5 Wakeup Mechanisms (Ablation Study)
+### B. The 6 Wakeup Mechanisms (Ablation Study)
 
 | Variant | Wait Strategy | Wakeup Signal | Idle CPU | Microsecond Latency | Use Case |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -69,6 +69,7 @@ The shared-memory ring buffer maps a cache-aligned `RingBuffer` struct into POSI
 | **`spin_backoff`**| Loop + `PP_PAUSE()` backoff | None (always checking) | High | **Very Low (<0.5 µs)** | Low-power userspace spinning |
 | **`adaptive`** | Spin 500 iters, then sleep | `futex` WAKE | Low | **Dynamic (0.2 – 10 µs)** | General-purpose high-load systems |
 | **`futex`** | System sleep (`FUTEX_WAIT`) | `futex` WAKE (`FUTEX_WAKE`) | **0%** | **Low-Medium (2 – 10 µs)** | Standard Linux thread sleep |
+| **`eventfd`** | System block (`poll`/`read`) | Eventfd write | **0%** | **Low-Medium (2 – 10 µs)** | Kernel file-descriptor event loop |
 | **`io_uring`** | `io_uring_submit_and_wait` | Write to Signal FIFO | **0%** | **Optimized Medium** | Asynchronous event-driven IPC |
 
 ---
@@ -79,7 +80,7 @@ To guarantee publication-grade precision and isolate IPC performance from OS jit
 
 ### A. Two-Suite Benchmark Design
 1. **Ablation Study (`src/ablation/run_ablation.sh`)**:
-   - Sweeps all 5 wakeup variants across **`saturated`** (maximum streaming throughput) and **`bursty`** (per-burst inter-arrival delay) traffic regimes.
+   - Sweeps all 6 wakeup variants across **`saturated`** (maximum streaming throughput) and **`bursty`** (per-burst inter-arrival delay) traffic regimes.
    - Dynamically scales payload transfer volume ($16\text{ MiB}$ for small messages, $128\text{ MiB}$ for medium, $512\text{ MiB}$ for large) to provide over **260,000 statistical iterations per run** while executing sweeps in minutes.
 2. **Ping-Pong Latency Suite (`src/pingpong/run_pingpong.sh`)**:
    - Enforces **Queue Depth = 1**: The initiator sends 1 message and stops; the responder echoes 1 message back. Exactly 1 message is in flight, eliminating queue backlog delay.
@@ -104,7 +105,7 @@ Cross-core hardware Time Stamp Counters (TSCs) drift by nanoseconds or microseco
 │   ├── ablation/                     # Benchmark #1: Wakeup Mechanism Ablation
 │   │   ├── common.h                  # Common definitions and dynamic sizing logic
 │   │   ├── ring.h                    # Cache-aligned RingBuffer layout
-│   │   ├── wakeup.h                  # Implementations of all 5 wakeup variants
+│   │   ├── wakeup.h                  # Implementations of all 6 wakeup variants
 │   │   ├── producer.cpp              # Ablation producer application
 │   │   ├── consumer.cpp              # Ablation consumer application & telemetry
 │   │   └── run_ablation.sh           # Execution script for ablation sweep
@@ -115,7 +116,7 @@ Cross-core hardware Time Stamp Counters (TSCs) drift by nanoseconds or microseco
 │       ├── pp_socket.cpp             # UNIX Domain Socket ping-pong implementation
 │       ├── pp_mq.cpp                 # POSIX Message Queue ping-pong implementation
 │       ├── pp_shm_uring.cpp          # SHM + io_uring ping-pong implementation
-│       ├── pp_ablation.cpp           # SHM Ping-pong across all 5 wakeup variants
+│       ├── pp_ablation.cpp           # SHM Ping-pong across all 6 wakeup variants
 │       └── run_pingpong.sh           # Execution script for ping-pong suite & plotting
 │
 ├── data/                             # Output CSV datasets
@@ -152,7 +153,7 @@ sudo sysctl -w fs.mqueue.msg_max=1024
 ### C. Running the Benchmark Suites
 
 #### Step 1: Benchmark Suite #1 — Ablation Study
-Executes the throughput and wakeup efficiency sweep across all 5 wakeup variants (`busy_poll`, `spin_backoff`, `adaptive`, `futex`, `io_uring`) under `saturated` and `bursty` regimes:
+Executes the throughput and wakeup efficiency sweep across all 6 wakeup variants (`busy_poll`, `spin_backoff`, `adaptive`, `futex`, `eventfd`, `io_uring`) under `saturated` and `bursty` regimes:
 ```bash
 cd src/ablation
 bash run_ablation.sh --regime saturated --regime bursty
@@ -171,8 +172,8 @@ bash run_pingpong.sh
 
 ## VI. Key Quantitative Findings
 
-1. **Sub-Microsecond Unloaded Latency**: The lock-free shared memory ring buffer with `busy_poll` achieves a median single-trip latency of **0.208 µs (208 nanoseconds)** at 64 B payloads, compared to **36.6 µs** for Unix Sockets and POSIX Pipes.
-2. **Zero-Idle-CPU Wakeups**: `futex` and `io_uring` wakeup variants consume **0% idle CPU** while delivering sub-15µs median round-trip latencies, offering an ideal trade-off for energy-efficient or cloud microservice environments.
+1. **Sub-Microsecond Unloaded Latency**: The lock-free shared memory ring buffer with `busy_poll` achieves a median single-trip latency of **0.208 µs (208 nanoseconds)** at 64 B payloads, compared to **3.29 µs** for POSIX Pipes and **3.03 µs** for UNIX Sockets.
+2. **Zero-Idle-CPU Wakeups**: `futex`, `eventfd`, and `io_uring` wakeup variants consume **0% idle CPU** while delivering sub-15µs median round-trip latencies, offering an ideal trade-off for energy-efficient or cloud microservice environments.
 3. **Tail Latency Stability**: Hardware core pinning (`Core 1` and `Core 2`) and cache-line separation (`alignas(64)`) prevent false sharing and keep P99 tail latencies stable across high-frequency message streams.
 
 ---
