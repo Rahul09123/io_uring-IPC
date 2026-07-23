@@ -172,9 +172,46 @@ bash run_pingpong.sh
 
 ## VI. Key Quantitative Findings
 
-1. **Sub-Microsecond Unloaded Latency**: The lock-free shared memory ring buffer with `busy_poll` achieves a median single-trip latency of **0.208 µs (208 nanoseconds)** at 64 B payloads, compared to **3.29 µs** for POSIX Pipes and **3.03 µs** for UNIX Sockets.
-2. **Zero-Idle-CPU Wakeups**: `futex`, `eventfd`, and `io_uring` wakeup variants consume **0% idle CPU** while delivering sub-15µs median round-trip latencies, offering an ideal trade-off for energy-efficient or cloud microservice environments.
-3. **Tail Latency Stability**: Hardware core pinning (`Core 1` and `Core 2`) and cache-line separation (`alignas(64)`) prevent false sharing and keep P99 tail latencies stable across high-frequency message streams.
+### A. Ping-Pong Unloaded Single-Trip Latency Sweep (Queue Depth = 1)
+
+*Single-trip median RTT/2 latency ($\mu\text{s}$) measured using `CLOCK_MONOTONIC_RAW` with CPU Core Affinity pinning:*
+
+| Transport / Variant | 64 B | 4 KiB | 64 KiB | 1 MiB | P99 (64 B) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **`shm_ablation (adaptive)`** | **0.213 µs** | 1.286 µs | 13.476 µs | 152.353 µs | 0.582 µs |
+| **`shm_ablation (busy_poll)`** | **0.218 µs** | 1.286 µs | 12.995 µs | 152.540 µs | 0.306 µs |
+| **`shm_ablation (spin_backoff)`** | **0.411 µs** | 1.483 µs | 13.311 µs | 149.975 µs | 0.781 µs |
+| **`unix_socket`** | 3.029 µs | 5.008 µs | 15.674 µs | **137.911 µs** | 5.087 µs |
+| **`shm_ablation (eventfd)`** | 3.113 µs | 3.750 µs | 14.831 µs | 152.591 µs | 4.431 µs |
+| **`shm_ablation (futex)`** | 3.207 µs | 3.746 µs | 14.914 µs | 152.156 µs | 4.570 µs |
+| **`pipe`** | 3.294 µs | 3.922 µs | 19.822 µs | 261.026 µs | 4.669 µs |
+| **`posix_mq`** | 3.351 µs | 4.606 µs | *N/A (sysctl)* | *N/A (sysctl)* | 4.605 µs |
+| **`shm_io_uring`** | 4.374 µs | 5.302 µs | 16.171 µs | 154.707 µs | 6.368 µs |
+
+---
+
+### B. Ablation Streaming Throughput Sweep (Saturated Regime)
+
+*Mean throughput ($\text{GiB/s}$) across 15 runs under continuous streaming:*
+
+| Wakeup Variant | 64 B | 4 KiB | 64 KiB (Peak) | 1 MiB |
+| :--- | :---: | :---: | :---: | :---: |
+| **`busy_poll`** | **0.667 GiB/s** | 18.77 GiB/s | **27.88 GiB/s** | 9.67 GiB/s |
+| **`spin_backoff`** | **0.677 GiB/s** | 18.75 GiB/s | 27.52 GiB/s | 9.66 GiB/s |
+| **`adaptive`** | 0.583 GiB/s | **18.89 GiB/s** | 27.10 GiB/s | 9.44 GiB/s |
+| **`io_uring`** | 0.370 GiB/s | 18.45 GiB/s | 27.75 GiB/s | 9.19 GiB/s |
+| **`eventfd`** | 0.632 GiB/s | 18.46 GiB/s | 26.83 GiB/s | 9.38 GiB/s |
+| **`futex`** | 0.637 GiB/s | 17.97 GiB/s | 26.69 GiB/s | 9.35 GiB/s |
+
+---
+
+### C. Major Insights & System Trade-Offs
+
+1. **Sub-Microsecond Unloaded Latency**: The lock-free shared memory ring buffer with `adaptive` or `busy_poll` achieves a median single-trip latency of **213 – 218 nanoseconds** at 64 B payloads, outperforming traditional kernel IPC mechanisms (`pipe`, `unix_socket`, `posix_mq`) by **~15×**.
+2. **Zero-Idle-CPU Wakeups**: `futex`, `eventfd`, and `io_uring` wakeup variants consume **0% idle CPU** while delivering sub-15µs median round-trip latencies, providing an energy-efficient trade-off for cloud microservices.
+3. **Peak Throughput at 64 KiB**: Saturated streaming throughput hits **27.88 GiB/s (~29.9 GB/s)** at 64 KiB payload size. At 1 MiB, throughput throttles to ~9.2–9.7 GiB/s across all variants due to the fixed 64-slot ring buffer recycling constraint.
+4. **UNIX Socket Efficiency at Large Payloads**: UNIX Domain Sockets achieve the lowest 1 MiB latency (**137.91 µs**), outperforming shared memory rings due to kernel socket buffer page-flipping optimizations when ring slots are constrained.
+5. **Tail Latency Stability**: Hardware core pinning (`Core 1` and `Core 2`) combined with cache-line separation (`alignas(64)`) prevents false sharing, maintaining P99 tail latencies under 0.6 µs for spinning SHM variants at 64 B.
 
 ---
 

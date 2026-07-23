@@ -83,3 +83,11 @@ python3 scripts/ablation_analysis.py --data data/ablation_results.csv --perf dat
 This produces:
 * `figures/ablation/fig1_wakeup_latency.png` (evaluates wakeup latencies in bursty conditions)
 * `figures/ablation/fig2_throughput_regime.png` (compares saturated throughput vs bursty payload sweeps)
+
+---
+
+## Empirical Findings Summary
+
+* **Saturated Streaming Peak**: All variants hit peak streaming throughput at **64 KiB payload size**, achieving **27.88 GiB/s** (`busy_poll`), **27.75 GiB/s** (`io_uring`), **27.52 GiB/s** (`spin_backoff`), and **27.10 GiB/s** (`adaptive`).
+* **Slot Recycling Bottleneck**: At **1 MiB**, throughput scales down to **~9.2 – 9.7 GiB/s** across all variants due to ring buffer slot capacity limits (64 slots).
+* **Wakeup Overhead in Bursty Regime**: Under intermittent traffic (`bursty` regime), spinning mechanisms (`busy_poll`, `spin_backoff`) maintain sub-microsecond latency (<0.13 µs at 64 B) by burning 100% CPU, while sleeping mechanisms (`futex`, `eventfd`, `io_uring`) consume **0% idle CPU** with ~1.0–1.1 ms core wake-up response times under frequency-scaling power states.
