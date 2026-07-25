@@ -76,24 +76,57 @@ The shared-memory ring buffer maps a cache-aligned `RingBuffer` struct into POSI
 
 ## III. Experimental Methodology
 
-To guarantee publication-grade precision and isolate IPC performance from OS jitter, the benchmark suite enforces the following experimental controls:
+To isolate IPC overhead from OS scheduling jitter and hardware cache anomalies, we enforce the following experimental controls:
 
-### A. Two-Suite Benchmark Design
-1. **Ablation Study (`src/ablation/run_ablation.sh`)**:
-   - Sweeps all 6 wakeup variants across **`saturated`** (maximum streaming throughput) and **`bursty`** (per-burst inter-arrival delay) traffic regimes.
-   - Dynamically scales payload transfer volume ($16\text{ MiB}$ for small messages, $128\text{ MiB}$ for medium, $512\text{ MiB}$ for large) to provide over **260,000 statistical iterations per run** while executing sweeps in minutes.
-2. **Ping-Pong Latency Suite (`src/pingpong/run_pingpong.sh`)**:
-   - Enforces **Queue Depth = 1**: The initiator sends 1 message and stops; the responder echoes 1 message back. Exactly 1 message is in flight, eliminating queue backlog delay.
-   - Evaluates **10,000 round-trip samples** per payload size to calculate exact P50, P90, P99, and P99.9 tail percentiles.
+### A. Message Size Sweep Matrix
+Benchmarks are executed across an exponential sweep of payload sizes $S \in \{64\text{ B}, 256\text{ B}, 1024\text{ B}, 4\text{ KiB}, 16\text{ KiB}, 64\text{ KiB}, 256\text{ KiB}, 1\text{ MiB}\}$.
 
-### B. Single-Clock Source (`CLOCK_MONOTONIC_RAW`)
-Cross-core hardware Time Stamp Counters (TSCs) drift by nanoseconds or microseconds. Taking $t_{\text{send}}$ on Core 1 and $t_{\text{recv}}$ on Core 2 introduces clock drift errors.
-- **Solution**: Both $t_{\text{start}}$ and $t_{\text{end}}$ are sampled on the **Initiator thread on Core 1** using hardware-fenced `CLOCK_MONOTONIC_RAW`.
-- $$\text{Single-Trip Latency} = \frac{t_{\text{end}} - t_{\text{start}}}{2}$$
+### B. CPU Affinity Pinning
+Processor affinity is pinned statically using `sched_setaffinity` to isolate tasks onto physical CPU cores, preventing core-hopping and optimizing cache usage:
+- **Producer Core**: Pinned to CPU Core 1.
+- **Consumer Core**: Pinned to CPU Core 2.
 
-### C. Hardware Core Affinity
-- **Producer / Initiator**: Pinned statically to **CPU Core 1** (`sched_setaffinity`).
-- **Consumer / Echo Server**: Pinned statically to **CPU Core 2** (`sched_setaffinity`).
+### C. Analytical Metrics
+For each message size class, the benchmark executes 1 warmup run (discarded) and $N = 15$ measured runs for statistics stabilization across all IPC mechanisms. The following equations define the metrics:
+1. **Throughput ($T$)**: The volume of data transferred per unit time:
+   $$T = \frac{B}{1024^3 \times t_{\text{exec}}} \quad (\text{GiB/s})$$
+   where $B$ is the total volume target in bytes, and $t_{\text{exec}}$ is the elapsed execution wall-clock time in seconds.
+2. **End-to-End Latency ($L_i$)**: The time taken for message $i$ to traverse the IPC channel:
+   $$L_i = t_{\text{recv}, i} - t_{\text{send}, i} \quad (\mu\text{s})$$
+   where $t_{\text{send}, i}$ is stamped by the producer immediately before write/publish, and $t_{\text{recv}, i}$ is stamped by the consumer immediately after read/retrieve.
+3. **Latency Standard Deviation ($\sigma$)**:
+   $$\sigma = \sqrt{\frac{1}{M}\sum_{i=1}^M (L_i - \bar{L})^2}$$
+   where $M$ is the number of latency samples and $\bar{L}$ is the arithmetic mean.
+
+### D. Workload Target Sizing
+To prevent brief runs from introducing clock resolution errors, target volumes scale based on the payload size classes and the specific IPC mechanism under test:
+- **POSIX Pipes & POSIX Message Queues (Dynamic Sizing)**:
+  - Small Payloads ($\le 1$ KiB): $32$ MiB total transfer.
+  - Medium Payloads ($\le 64$ KiB): $256$ MiB total transfer.
+  - Large Payloads ($> 64$ KiB): $2$ GiB total transfer.
+- **UNIX Domain Sockets & `io_uring` Shared Ring (Static Sizing)**:
+  - All Payload Sizes ($64$ Bytes to $1$ MiB): $2$ GiB total transfer.
+
+### E. Checksum Verification
+To prevent compilers from optimizing out the memory access path, the consumer performs a strided cache-line payload touch:
+$$\text{Checksum} = \sum_{k=0}^{S/64} \text{Payload}[64 \times k]$$
+This forces physical L1/L2 data cache fills, mimicking a real application reading incoming message payloads.
+
+### F. Reference Test Environment
+All benchmark runs and profiling tasks were executed on a dedicated test machine with the following physical and operating system specifications:
+- **System Model**: ASUS Vivobook K3605ZF (Vivobook_ASUSLaptop K3605ZF_K3605ZF)
+- **Operating System**: Ubuntu 24.04.4 LTS (noble)
+- **CPU Architecture**: `x86_64`
+- **Processor**: 12th Gen Intel(R) Core(TM) i5-12500H
+  - **Thread/Core Layout**: 12 Physical Cores (16 Threads, 1 Socket)
+  - **Frequency**: Max 4500.00 MHz / Min 400.00 MHz
+  - **Caches**: L1d 448 KiB (12 instances), L1i 640 KiB (12 instances), L2 9 MiB (6 instances), L3 18 MiB (1 instance)
+- **System Memory**: 16 GiB System Memory (2x 8GiB SODIMM DDR4 Synchronous 3200 MHz)
+- **Virtual Memory**: 4.0 GiB Swap
+- **Storage**: 512GB NVMe SSD (SAMSUNG MZVL4512HBLU-00BTW)
+- **Graphics Processors**:
+  - Integrated: Intel Corporation Alder Lake-P GT2 [Iris Xe Graphics]
+  - Dedicated: NVIDIA Corporation GA107M [GeForce RTX 2050]
 
 ---
 

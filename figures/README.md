@@ -77,8 +77,8 @@ The flamegraph SVGs located in the `flamegraphs/` subdirectory illustrate the di
   - **`pipelined_send` & `pipelined_receive`**: A specialized kernel optimization path. When a receiver is already waiting, the kernel bypasses the intermediate queue buffer and copies the message payload directly into the consumer's memory buffer, showing up as a wide memory-copy frame.
   - **Virtual Filesystem (VFS) Overheads**: Since POSIX message queues are represented as nodes under the `mqueue` virtual filesystem, file permission checks, descriptor allocation, and inode lock modifications (`mqueue_evict_inode`) occupy a visible portion of the stack.
 
-### 3.4 io_uring Shared Ring Profile (`uring_flamegraph.svg` / `final_io_uring.jpg`)
-- **Visual Pattern**: Extremely shallow userspace stacks for the benchmark processes, contrasted with periodic `io_uring_enter` system-call entries on the wakeup path.
+### 3.4 io_uring Shared Ring Profile (`final_io_uring.jpg`)
+- **Visual Pattern**: Extremely shallow userspace stacks for the benchmark processes, contrasted with a separate, highly focused kernel thread polling stack.
 - **Key Call Stacks & Hotspots**:
   - **Lock-Free Userspace Spinloops**: The active producer and consumer processes (`uring_producer` and `uring_consumer`) spend almost their entire CPU budget executing userspace loops checking atomic index pointers. This is represented by wide, shallow frames compiling directly to `CPU_PAUSE` instructions (`_mm_pause` or assembly `yield`).
   - **`io_uring_enter` (Wakeup Signaling Path)**: The benchmark runs `io_uring` in default interrupt mode (`flags=0`, no SQPOLL). When the ring is empty, the consumer calls `io_uring_submit_and_wait` to block on an `IORING_OP_READ` from the signaling FIFO; the producer uses `io_uring_prep_write` to send a one-byte wakeup. These calls appear as narrow `io_uring_enter` entries — narrow because they only fire when the ring is empty, not on every message.

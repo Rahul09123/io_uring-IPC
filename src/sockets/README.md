@@ -94,11 +94,11 @@ The following constants and buffer sizes are used directly by code:
 Note: Linux may internally adjust effective socket buffer sizes; values above are requested values from userspace.
 
 ### 3.6 Run Structure
-`NUM_RUNS = 5`, and loop form is `for (run = 0; run <= NUM_RUNS; ++run)`:
+`NUM_RUNS = 15`, and loop form is `for (run = 0; run <= NUM_RUNS; ++run)`:
 - Run `0`: warmup (printed only)
-- Runs `1..5`: measured and written to CSV
+- Runs `1..15`: measured and written to CSV
 
-So each message size executes 6 total runs, 5 recorded runs.
+So each message size executes 16 total runs, 15 recorded runs.
 
 ### 3.7 Message Size Matrix
 Sizes in bytes:
@@ -181,7 +181,7 @@ bash run_socket_bench.sh
 - `PRODUCER_CORE = 1`
 - `CONSUMER_CORE = 2`
 - `MESSAGE_SIZES = {64,256,1024,4096,16384,65536,262144,1048576}`
-- `NUM_RUNS = 5`
+- `NUM_RUNS = 15`
 - `TOTAL_BYTES = 2*1024*1024*1024`
 - `MAX_PAYLOAD = 1048576`
 - `MAX_LAT_SAMPLES = 4*1024*1024`
