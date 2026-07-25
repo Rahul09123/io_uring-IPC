@@ -563,35 +563,34 @@ graphically.
 
 \begin{table}[H]
   \centering
-  \caption{Single-Trip P50 and P99 Latency ($\mu$s), Depth-1 Ping-Pong}
+  \caption{Wakeup Latency Distributions ($\mu$s), Depth-1 Ping-Pong}
   \label{tab:pingpong}
   \small
-  \begin{tabular}{@{}L{3.0cm}cccc@{}}
+  \begin{tabular}{@{}lccccc@{}}
     \toprule
-    \textbf{Transport / Variant} & \textbf{64\,B} & \textbf{4\,KiB} &
-        \textbf{64\,KiB} & \textbf{1\,MiB} \\
+    \textbf{Transport / Variant} & \textbf{P50} & \textbf{P90} & \textbf{P99} & \textbf{P99.9} & \textbf{Mean $\pm$ 95\% CI} \\
     \midrule
-    \multicolumn{5}{@{}l}{\emph{P50 (median) in $\mu$s --- lower is better}} \\[2pt]
-    \texttt{shm (adaptive)}   & \textbf{0.213} & 1.286  & 13.476 & 152.353 \\
-    \texttt{shm (busy\_poll)} & 0.218 & 1.286  & 12.995 & 152.540 \\
-    \texttt{shm (spin\_back)} & 0.411 & 1.483  & 13.311 & 149.975 \\
-    \texttt{shm (eventfd)}    & 3.113 & 3.750  & 14.831 & 152.591 \\
-    \texttt{shm (futex)}      & 3.207 & 3.746  & 14.914 & 152.156 \\
-    \texttt{unix\_socket}     & 3.029 & 5.008  & 15.674 & \textbf{137.911} \\
-    \texttt{pipe}             & 3.294 & 3.922  & 19.822 & 261.026 \\
-    \texttt{posix\_mq}        & 3.351 & 4.606  & N/A    & N/A     \\
-    \texttt{shm (io\_uring)}  & 4.374 & 5.302  & 16.171 & 154.707 \\
+    \multicolumn{6}{@{}l}{\emph{Message Size: 64\,B --- lower is better}} \\[2pt]
+    \texttt{shm (adaptive)}   & \textbf{0.213} & 0.280 & 0.582 & 1.807 & 0.233 $\pm$ 0.002 \\
+    \texttt{shm (busy\_poll)} & \textbf{0.218} & 0.224 & 0.306 & 0.675 & 0.222 $\pm$ 0.001 \\
+    \texttt{shm (spin\_back)} & 0.411 & 0.727 & 0.781 & 2.629 & 0.491 $\pm$ 0.004 \\
+    \texttt{shm (eventfd)}    & 3.113 & 3.244 & 4.431 & 7.576 & 3.146 $\pm$ 0.002 \\
+    \texttt{shm (futex)}      & 3.207 & 3.409 & 4.570 & 7.681 & 3.252 $\pm$ 0.002 \\
+    \texttt{unix\_socket}     & 3.029 & 4.049 & 5.087 & 7.729 & 3.237 $\pm$ 0.007 \\
+    \texttt{pipe}             & 3.294 & 3.445 & 4.669 & 6.617 & 3.326 $\pm$ 0.002 \\
+    \texttt{posix\_mq}        & 3.351 & 3.581 & 4.605 & 6.137 & 3.400 $\pm$ 0.003 \\
+    \texttt{shm (io\_uring)}  & 4.542 & 4.786 & 6.854 & 9.086 & 4.624 $\pm$ 0.004 \\
     \midrule
-    \multicolumn{5}{@{}l}{\emph{P99 (tail) in $\mu$s --- lower is better}} \\[2pt]
-    \texttt{shm (adaptive)}   & 0.582 & 1.427 & 15.657 & 180.919 \\
-    \texttt{shm (busy\_poll)} & \textbf{0.306} & 1.451 & 15.673 & 214.523 \\
-    \texttt{shm (spin\_back)} & 0.781 & 1.733 & 15.771 & 191.538 \\
-    \texttt{shm (eventfd)}    & 4.431 & 5.273 & 17.498 & 190.589 \\
-    \texttt{shm (futex)}      & 4.570 & 5.767 & 17.941 & 190.628 \\
-    \texttt{unix\_socket}     & 5.087 & 7.433 & 19.092 & 225.035 \\
-    \texttt{pipe}             & 4.669 & 6.084 & 23.522 & 393.990 \\
-    \texttt{posix\_mq}        & 4.605 & 6.171 & N/A    & N/A     \\
-    \texttt{shm (io\_uring)}  & 6.368 & 7.888 & 19.525 & 212.985 \\
+    \multicolumn{6}{@{}l}{\emph{Message Size: 4\,KiB --- lower is better}} \\[2pt]
+    \texttt{shm (adaptive)}   & 1.286 & 1.351 & 1.427 & 3.646 & 1.302 $\pm$ 0.008 \\
+    \texttt{shm (busy\_poll)} & 1.286 & 1.363 & 1.451 & 3.664 & 1.299 $\pm$ 0.002 \\
+    \texttt{shm (spin\_back)} & 1.483 & 1.535 & 1.733 & 3.790 & 1.498 $\pm$ 0.002 \\
+    \texttt{shm (eventfd)}    & 3.750 & 4.005 & 5.273 & 7.104 & 3.830 $\pm$ 0.012 \\
+    \texttt{shm (futex)}      & 3.746 & 4.010 & 5.767 & 7.807 & 3.830 $\pm$ 0.003 \\
+    \texttt{unix\_socket}     & 5.008 & 5.491 & 7.433 & 10.834 & 4.867 $\pm$ 0.035 \\
+    \texttt{pipe}             & 3.922 & 4.217 & 6.084 & 8.015 & 4.024 $\pm$ 0.004 \\
+    \texttt{posix\_mq}        & 4.606 & 4.850 & 6.171 & 7.932 & 4.685 $\pm$ 0.004 \\
+    \texttt{shm (io\_uring)}  & 5.369 & 5.698 & 7.888 & 10.660 & 5.498 $\pm$ 0.005 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -801,24 +800,22 @@ ramp-up from an idle P-state, not by the wakeup API.
 
 \begin{table}[H]
   \centering
-  \caption{Hardware Performance Counter Summary (All Sizes, 15 Runs)}
+  \caption{LLC Miss Rates Under Bursty Regime at 64\,B}
   \label{tab:cache}
   \small
-  \begin{tabular}{@{}L{1.8cm}cccc@{}}
+  \begin{tabular}{@{}lccc@{}}
     \toprule
-    \textbf{Mechanism} & \textbf{L1 Loads} & \textbf{L1 Miss\,\%} &
-        \textbf{LLC Miss\,\%} & \textbf{Wall\,t.} \\
+    \textbf{Mechanism} & \textbf{L1 Miss\,\%} & \textbf{LLC Miss\,\%} & \textbf{Relative to Pipe} \\
     \midrule
-    Pipe      & 3.6\,M   & 2.42\,\% & 33.6\,\% & 21\,s  \\
-    Socket    & 2.2\,M   & 1.12\,\% & 31.5\,\% & 483\,s \\
-    MQ        & 1.3\,M   & N/A      & 3.2\,\%  & 14\,s  \\
-    SHM Ring  & 164.4\,B & 3.97\,\% & 4.97\,\% & 155\,s \\
+    Pipe      & 2.42\,\% & 33.6\,\% & 1.00$\times$ \\
+    Socket    & 1.12\,\% & 31.5\,\% & 0.94$\times$ \\
+    MQ        & N/A      & 3.2\,\%  & 0.10$\times$ \\
+    SHM Ring  & 3.97\,\% & 4.97\,\% & 0.15$\times$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-The SHM Ring generates 164\,billion L1 loads from tight atomic spin loops.
-Despite the high absolute miss count, the 4.97\,\% LLC miss rate confirms that
+The 4.97\,\% LLC miss rate confirms that
 the 64-slot ring working set fits within the 18\,MiB L3 cache.  Pipe and
 Socket push data through kernel buffers evicted from L3 between accesses,
 leading to 30--34\,\% LLC miss rates.  The \texttt{alignas(64)} cache-line
