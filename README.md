@@ -78,39 +78,39 @@ The shared-memory ring buffer maps a cache-aligned `RingBuffer` struct into POSI
 
 To isolate IPC overhead from OS scheduling jitter and hardware cache anomalies, we enforce the following experimental controls:
 
-### A. Message Size Sweep Matrix
+### A. Two-Suite Benchmark Design
+1. **Ablation Study (`src/ablation/run_ablation.sh`)**:
+   - Sweeps all 6 wakeup variants (`busy_poll`, `spin_backoff`, `adaptive`, `futex`, `eventfd`, `io_uring`) across **`saturated`** (maximum streaming throughput) and **`bursty`** (per-burst inter-arrival delay) traffic regimes.
+   - Dynamically scales payload transfer volume ($16\text{ MiB}$ for small messages, $128\text{ MiB}$ for medium, $512\text{ MiB}$ for large) to provide over **260,000 statistical iterations per run** while executing sweeps in minutes.
+2. **Ping-Pong Latency Suite (`src/pingpong/run_pingpong.sh`)**:
+   - Enforces **Queue Depth = 1**: The initiator sends 1 message and stops; the responder echoes 1 message back. Exactly 1 message is in flight, eliminating queue backlog delay and pipelining distortion.
+   - Evaluates **100,000 round-trip samples** per payload size to calculate exact median (P50), P90, P99, and P99.9 tail percentiles.
+
+### B. Single-Clock Source (`CLOCK_MONOTONIC_RAW`) & Hardware Core Affinity
+Cross-core hardware Time Stamp Counters (TSCs) drift by nanoseconds or microseconds. Taking $t_{\text{send}}$ on Core 1 and $t_{\text{recv}}$ on Core 2 introduces clock drift errors.
+- **Single Clock Source**: Both $t_{\text{start}}$ and $t_{\text{end}}$ are sampled on the **Initiator thread on Core 1** using hardware-fenced `CLOCK_MONOTONIC_RAW`:
+  $$\text{Single-Trip Latency} = \frac{t_{\text{end}} - t_{\text{start}}}{2}$$
+- **CPU Core Affinity**: Tasks are statically pinned using `sched_setaffinity`:
+  - **Producer / Initiator Core**: Pinned to **CPU Core 1**.
+  - **Consumer / Echo Server Core**: Pinned to **CPU Core 2**.
+
+### C. Message Size Sweep Matrix
 Benchmarks are executed across an exponential sweep of payload sizes $S \in \{64\text{ B}, 256\text{ B}, 1024\text{ B}, 4\text{ KiB}, 16\text{ KiB}, 64\text{ KiB}, 256\text{ KiB}, 1\text{ MiB}\}$.
 
-### B. CPU Affinity Pinning
-Processor affinity is pinned statically using `sched_setaffinity` to isolate tasks onto physical CPU cores, preventing core-hopping and optimizing cache usage:
-- **Producer Core**: Pinned to CPU Core 1.
-- **Consumer Core**: Pinned to CPU Core 2.
+### D. Analytical Metrics & Checksum Verification
+For each message size class, the benchmark executes 1 warmup run (discarded) and $N = 15$ measured runs for statistics stabilization across all IPC mechanisms.
+1. **Throughput ($T$)**: $$T = \frac{B}{1024^3 \times t_{\text{exec}}} \quad (\text{GiB/s})$$
+2. **End-to-End Latency ($L_i$)**: $$L_i = t_{\text{recv}, i} - t_{\text{send}, i} \quad (\mu\text{s})$$
+3. **Latency Standard Deviation ($\sigma$)**: $$\sigma = \sqrt{\frac{1}{M}\sum_{i=1}^M (L_i - \bar{L})^2}$$
+4. **Checksum Verification**: Consumer performs a strided cache-line payload touch ($\sum_{k=0}^{S/64} \text{Payload}[64 \times k]$) to force physical L1/L2 data cache fills.
 
-### C. Analytical Metrics
-For each message size class, the benchmark executes 1 warmup run (discarded) and $N = 15$ measured runs for statistics stabilization across all IPC mechanisms. The following equations define the metrics:
-1. **Throughput ($T$)**: The volume of data transferred per unit time:
-   $$T = \frac{B}{1024^3 \times t_{\text{exec}}} \quad (\text{GiB/s})$$
-   where $B$ is the total volume target in bytes, and $t_{\text{exec}}$ is the elapsed execution wall-clock time in seconds.
-2. **End-to-End Latency ($L_i$)**: The time taken for message $i$ to traverse the IPC channel:
-   $$L_i = t_{\text{recv}, i} - t_{\text{send}, i} \quad (\mu\text{s})$$
-   where $t_{\text{send}, i}$ is stamped by the producer immediately before write/publish, and $t_{\text{recv}, i}$ is stamped by the consumer immediately after read/retrieve.
-3. **Latency Standard Deviation ($\sigma$)**:
-   $$\sigma = \sqrt{\frac{1}{M}\sum_{i=1}^M (L_i - \bar{L})^2}$$
-   where $M$ is the number of latency samples and $\bar{L}$ is the arithmetic mean.
-
-### D. Workload Target Sizing
-To prevent brief runs from introducing clock resolution errors, target volumes scale based on the payload size classes and the specific IPC mechanism under test:
+### E. Workload Target Sizing
 - **POSIX Pipes & POSIX Message Queues (Dynamic Sizing)**:
   - Small Payloads ($\le 1$ KiB): $32$ MiB total transfer.
   - Medium Payloads ($\le 64$ KiB): $256$ MiB total transfer.
   - Large Payloads ($> 64$ KiB): $2$ GiB total transfer.
 - **UNIX Domain Sockets & `io_uring` Shared Ring (Static Sizing)**:
   - All Payload Sizes ($64$ Bytes to $1$ MiB): $2$ GiB total transfer.
-
-### E. Checksum Verification
-To prevent compilers from optimizing out the memory access path, the consumer performs a strided cache-line payload touch:
-$$\text{Checksum} = \sum_{k=0}^{S/64} \text{Payload}[64 \times k]$$
-This forces physical L1/L2 data cache fills, mimicking a real application reading incoming message payloads.
 
 ### F. Reference Test Environment
 All benchmark runs and profiling tasks were executed on a dedicated test machine with the following physical and operating system specifications:
