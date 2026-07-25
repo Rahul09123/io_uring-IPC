@@ -132,8 +132,8 @@ gains.  Spinning variants achieve median single-trip latencies of
 socket---and peak streaming throughput of \textbf{27.88\,GiB/s} at 64\,KiB.
 For single-ring SPSC wakeup, \texttt{io\_uring} performs on par with
 \texttt{futex} and \texttt{eventfd}: all three enter the kernel and block the
-thread, producing $\approx$1.09--1.10\,ms median wakeup latency under a
-\texttt{powersave} CPU governor with 0\,\% idle CPU consumption.
+thread, producing $\approx$1.09--1.10\,ms median wakeup latency under normal
+operating conditions with 0\,\% idle CPU consumption.
 \texttt{io\_uring}'s advantage lies in providing a unified, future-proof
 asynchronous I/O interface without any latency penalty, making it
 architecturally preferable for event-driven systems managing many concurrent
@@ -506,7 +506,7 @@ P50, P90, P99, and P99.9 percentiles reported.
     Storage         & 512\,GB Samsung NVMe SSD \\
     Compiler        & g++ -O2, C++17 \\
     liburing        & System package, Ubuntu 24.04 \\
-    CPU Governor    & \texttt{performance} \\
+    CPU Governor    & Default (\texttt{schedutil}) \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -516,10 +516,11 @@ Echo-Server pinned to Core~2 via \texttt{sched\_setaffinity}.  Both cores
 share the 18\,MiB L3 cache, keeping the ring buffer warm across the
 inter-process boundary.
 
-\textbf{CPU tuning.}  The \texttt{performance} governor is applied to prevent
-P-state transitions from inflating wakeup latencies.  Without this, the
-$\approx$1.09\,ms bursty-regime wakeup latencies partly reflect CPU frequency
-ramp-up, not the wakeup primitive itself.
+\textbf{CPU tuning.}  The system runs under normal default conditions
+(\texttt{schedutil} governor) to reflect standard server deployments.
+Consequently, the $\approx$1.09\,ms bursty-regime wakeup latencies partly
+reflect standard CPU frequency ramp-up from idle states alongside the
+wakeup primitive overhead.
 
 \subsection{Statistical Methodology}
 
@@ -743,8 +744,8 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
   \caption{Bursty-Regime Wakeup Latency Across Six SHM Variants.  Spinning
     variants maintain near-zero wakeup latency at 100\,\% CPU cost.
     Kernel-sleeping variants (\texttt{futex}, \texttt{eventfd},
-    \texttt{io\_uring}) converge to $\approx$1090--1105\,$\mu$s under the
-    \texttt{powersave} governor (dominated by CPU frequency ramp-up).}
+    \texttt{io\_uring}) converge to $\approx$1090--1105\,$\mu$s under normal
+    conditions (dominated by CPU frequency ramp-up from idle states).}
   \label{fig:wakeup_lat}
 \end{figure}
 
@@ -899,7 +900,7 @@ consumption by up to 80\,\% during idle gaps without hot-path latency impact.
 \paragraph{Cloud Microservices / Energy-Constrained Environments.}
 Use SHM ring with \texttt{futex} or \texttt{eventfd}.  Both deliver
 $\approx$0\,\% idle CPU, sub-5\,$\mu$s P50, and sub-6\,$\mu$s P99 at 64\,B
-under the \texttt{performance} governor.  \texttt{eventfd} integrates naturally
+under normal conditions.  \texttt{eventfd} integrates naturally
 into existing \texttt{poll}/\texttt{epoll} event loops without futex-specific
 code, making it the lower-friction choice for retrofit into existing stacks.
 
@@ -988,11 +989,10 @@ our results confirm it is the optimal strategy.
         may shift the bottleneck to serialisation rather than ring mechanics.
 
   \item \textbf{CPU frequency effects.}  The $\approx$1.09\,ms bursty-regime
-        wakeup latencies reflect CPU frequency ramp-up under the
-        \texttt{powersave} governor.  All benchmarks in this paper use the
-        \texttt{performance} governor; practitioners in low-power cloud
-        environments should budget for frequency ramp-up in worst-case latency
-        models.
+        wakeup latencies reflect standard CPU frequency ramp-up under normal
+        default conditions (\texttt{schedutil}). Practitioners running strict
+        hard-real-time systems would typically lock CPU frequencies to maximum
+        to eliminate this ramp-up delay, reducing wakeup latency further.
 
   \item \textbf{POSIX MQ size cap.}  Results for POSIX MQ at $\geq$16\,KiB
         are unavailable due to the default
