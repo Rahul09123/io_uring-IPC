@@ -18,7 +18,7 @@ The shared header in each IPC folder defines the benchmark constants. The import
 - `MESSAGE_SIZES`: 64 B, 256 B, 1 KiB, 4 KiB, 16 KiB, 64 KiB, 256 KiB, 1 MiB
 - `PRODUCER_CORE`: 1
 - `CONSUMER_CORE`: 2
-- `SQPOLL_CORE`: 3 for io_uring when SQPOLL is available
+- `SQPOLL_CORE`: 3 (declared in `src/io_uring/common.h` but not passed to `io_uring_queue_init` — SQPOLL is not active; `io_uring` runs in default interrupt mode)
 - `MAX_PAYLOAD`: 1 MiB
 - `MAX_LAT_SAMPLES`: 4 MiB latency samples buffer
 
@@ -32,8 +32,9 @@ The benchmark code also follows a simple measurement discipline:
 4. Scale workload volumes depending on the IPC mechanism:
    - **POSIX Pipes & POSIX Message Queues**: Dynamically scaled (32 MB for messages $\le 1$ KiB, 256 MB for $\le 64$ KiB, and 2 GB for larger messages) to optimize execution times.
    - **UNIX Domain Sockets & `io_uring` Shared Ring**: Static 2 GB workload across all message sizes.
-5. Record throughput and latency statistics in CSV output.
-6. Generate flamegraphs and cache-miss summaries for the accompanying analysis.
+5. Execute $N = 15$ measured runs per message size for all four mechanisms (1 warmup run is discarded).
+6. Record throughput and latency statistics in CSV output.
+7. Generate flamegraphs and cache-miss summaries for the accompanying analysis.
 
 ## POSIX Pipe Implementation
 
