@@ -737,6 +737,25 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
   \end{tabular}
 \end{table}
 
+\begin{table}[H]
+  \centering
+  \caption{CPU Resource Efficiency per 64\,B Message (Bursty Regime)}
+  \label{tab:cpucost}
+  \small
+  \begin{tabular}{@{}lrrr@{}}
+    \toprule
+    \textbf{Variant} & \textbf{Cycles / Msg} & \textbf{Ctx-Sw / Msg} & \textbf{Insn / Msg} \\
+    \midrule
+    \texttt{futex}         & 9,310   & 0.0263 & 8,512 \\
+    \texttt{eventfd}       & 9,653   & 0.0280 & 8,711 \\
+    \texttt{io\_uring}     & 11,338  & 0.0287 & 10,928 \\
+    \texttt{adaptive}      & 21,620  & 0.0243 & 12,323 \\
+    \texttt{busy\_poll}    & 114,789 & 0.0003 & 216,267 \\
+    \texttt{spin\_backoff} & 202,011 & 0.0003 & 158,135 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
 \begin{figure}[H]
   \centering
   \includegraphics[width=\columnwidth]{figures/ablation/fig1_wakeup_latency.png}
