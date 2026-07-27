@@ -6,15 +6,27 @@ import os
 def parse_perf_stat(path):
     text = open(path).read()
     def grab(pattern):
-        m = re.search(pattern, text)
-        return float(m.group(1).replace(",", "")) if m else None
+        matches = re.findall(pattern, text)
+        if not matches:
+            return None
+        total = 0.0
+        found = False
+        for val in matches:
+            val_clean = val.replace(",", "").strip()
+            if val_clean and val_clean != "<not counted>":
+                try:
+                    total += float(val_clean)
+                    found = True
+                except ValueError:
+                    pass
+        return total if found else None
 
     return {
-        "cycles": grab(r"([\d,]+)\s+cycles"),
-        "instructions": grab(r"([\d,]+)\s+instructions"),
-        "context_switches": grab(r"([\d,]+)\s+context-switches"),
-        "cpu_migrations": grab(r"([\d,]+)\s+cpu-migrations"),
-        "task_clock_ms": grab(r"([\d.]+)\s+task-clock"),
+        "cycles": grab(r"([\d,]+)\s+.*cycles"),
+        "instructions": grab(r"([\d,]+)\s+.*instructions"),
+        "context_switches": grab(r"([\d,]+)\s+.*context-switches"),
+        "cpu_migrations": grab(r"([\d,]+)\s+.*cpu-migrations"),
+        "task_clock_ms": grab(r"([\d.]+)\s+.*task-clock"),
     }
 
 rows = []
