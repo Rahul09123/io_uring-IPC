@@ -21,6 +21,9 @@ for variant in busy_poll spin_backoff adaptive futex eventfd io_uring; do
         "io_uring") V_INT=5 ;;
     esac
 
+    # Clean up stale IPC objects (same as run_ablation.sh)
+    rm -f /tmp/ablation_sig_fifo /tmp/ablation_consumer_pid /dev/shm/ipc_ablation_ring 2>/dev/null || true
+    
     # Start consumer under perf stat (argv[1]=variant_int, argv[2]=csv_out)
     perf stat -e cycles,instructions,context-switches,cpu-migrations,task-clock \
         -o ../../../data/perf_${variant}_bursty_64B.txt \
@@ -29,7 +32,7 @@ for variant in busy_poll spin_backoff adaptive futex eventfd io_uring; do
     CONSUMER_PID=$!
     
     # Wait a moment for consumer to be ready
-    sleep 0.5
+    sleep 1.5
     
 
     
