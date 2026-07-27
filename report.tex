@@ -8,7 +8,10 @@
 % ── Core Packages ────────────────────────────────────────────────────────────
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
-\usepackage[final,expansion=false]{microtype}
+\usepackage[final]{microtype}
+\tolerance=1200
+\emergencystretch=1.5em
+\hyphenpenalty=50
 \usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage{booktabs}
@@ -358,30 +361,34 @@ struct alignas(64) RingBuffer {
 Three design properties are critical.
 
 \textbf{(1) Cache-line isolation.}  \texttt{head}, \texttt{tail}, and
-\texttt{consumer\_sleeping} each occupy their own 64-byte cache line.
-Without this separation, a producer write to \texttt{head} invalidates the
-cache line containing \texttt{tail} on the consumer core, forcing an RFO
-(Request For Ownership) round-trip on every slot transition.  Our hardware
-counter data (Table~\ref{tab:cache}) confirms this: the SHM Ring's 4.97\,\%
-LLC miss rate compares favourably to 30--34\,\% for mechanisms that traverse
-kernel buffers and inadvertently evict ring control variables.
+\texttt{consumer\-\_sleeping} each occupy their own 64-byte cache line.
+Without this separation, a producer write to \texttt{head} invalidates
+the cache line containing \texttt{tail} on the consumer core, forcing
+an RFO (Request For Ownership) round-trip on every slot transition.  Our
+hardware counter data (Table~\ref{tab:cache}) confirms this: the SHM
+Ring's 4.97\,\% LLC miss rate compares favourably to 30--34\,\% for
+mechanisms that traverse kernel buffers and inadvertently evict ring
+control variables.
 
-\textbf{(2) Sequential consistency at publish boundaries.}  \texttt{head} is
-stored with \texttt{memory\_order\_seq\_cst} to prevent Store-Load reordering
-that could cause the producer to read stale \texttt{consumer\_sleeping~=~0}
-and skip sending a wakeup, silently deadlocking the consumer.  On x86 (TSO),
-this is equivalent to a plain store followed by a \texttt{mfence}; on ARM64
-it compiles to a \texttt{stlr} (store-release) instruction.
+\textbf{(2) Sequential consistency at publish boundaries.}
+\texttt{head} is stored with \texttt{memory\-\_order\-\_seq\-\_cst}
+to prevent Store-Load reordering that could cause the producer to read
+stale \texttt{consumer\-\_sleeping~=~0} and skip sending a wakeup,
+silently deadlocking the consumer.  On x86 (TSO), this is equivalent to
+a plain store followed by a \texttt{mfence}; on ARM64 it compiles to a
+\texttt{stlr} (store-release) instruction.
 
 \textbf{(3) Lost-wakeup prevention.}  A classic race exists in any
-producer-consumer pair: the consumer checks \texttt{head == tail} (empty),
-decides to sleep, but before setting \texttt{consumer\_sleeping}, the producer
-writes a slot and checks \texttt{consumer\_sleeping~=~0} (decides not to signal),
-then the consumer sets \texttt{consumer\_sleeping~=~1} and waits---forever.  We
-eliminate this race by having the consumer set \texttt{consumer\_sleeping~=~1}
-\emph{first}, then re-check \texttt{head~!=~tail} under a full memory fence.
-If a slot arrived in the window, the re-check catches it and the consumer
-proceeds without sleeping.
+producer-consumer pair: the consumer checks \texttt{head == tail}
+(empty), decides to sleep, but before setting
+\texttt{consumer\-\_sleeping}, the producer writes a slot and checks
+\texttt{consumer\-\_sleeping~=~0} (decides not to signal), then the
+consumer sets \texttt{consumer\-\_sleeping~=~1} and waits---forever.
+We eliminate this race by having the consumer set
+\texttt{consumer\-\_sleeping~=~1} \emph{first}, then re-check
+\texttt{head~!=~tail} under a full memory fence.  If a slot arrived in
+the window, the re-check catches it and the consumer proceeds without
+sleeping.
 
 \textbf{Data-flow walkthrough.}  On every message transfer: (a)~the producer
 calls \texttt{memcpy} into \texttt{slots[head \% NUM\_SLOTS].data}, writes the
@@ -419,10 +426,11 @@ ring is rarely empty (spin wins) while gracefully handling burst-idle traffic
 (futex sleep saves power).
 
 \paragraph{4.~\texttt{futex}.}
-The consumer stores 1 to \texttt{consumer\_sleeping} and calls
-\texttt{SYS\_futex(FUTEX\_WAIT)}.  The kernel checks the address atomically; if
-it still reads~1, the thread is suspended.  The producer stores~0 and calls
-\texttt{FUTEX\_WAKE}.  One system call per sleep and per wakeup event.
+The consumer stores~1 to \texttt{consumer\-\_sleeping} and calls
+\texttt{SYS\-\_futex(FUTEX\-\_WAIT)}.  The kernel checks the address
+atomically; if it still reads~1, the thread is suspended.  The producer
+stores~0 and calls \texttt{FUTEX\-\_WAKE}.  One system call per sleep
+and per wakeup event.
 
 \paragraph{5.~\texttt{eventfd}.}
 The consumer \texttt{poll}s an eventfd file descriptor and then \texttt{read}s
@@ -431,29 +439,29 @@ The eventfd is compatible with \texttt{epoll}/\texttt{select}, easing
 integration into existing event-loop frameworks.
 
 \paragraph{6.~\texttt{io\_uring}.}
-The consumer submits an \texttt{IORING\_OP\_READ} SQE targeting a named FIFO
-(\texttt{/tmp/uring\_sig\_fifo}) and blocks in
-\texttt{io\_uring\_submit\_and\_wait(ring, 1)}.  The producer submits an
-\texttt{IORING\_OP\_WRITE} SQE to the same FIFO and calls
-\texttt{io\_uring\_submit}.  The \texttt{io\_uring} context can simultaneously
-monitor additional FDs, making it advantageous for frameworks managing many
-concurrent channels.
+The consumer submits an \texttt{IORING\-\_OP\-\_READ} SQE targeting a
+named FIFO (\texttt{/tmp/\allowbreak uring\-\_sig\-\_fifo}) and blocks
+in \texttt{io\-\_uring\-\_submit\-\_and\-\_wait\-(ring,~1)}.  The
+producer submits an \texttt{IORING\-\_OP\-\_WRITE} SQE to the same FIFO
+and calls \texttt{io\-\_uring\-\_submit}.  The \texttt{io\-\_uring}
+context can simultaneously monitor additional FDs, making it advantageous
+for frameworks managing many concurrent channels.
 
 \begin{table}[H]
   \centering
   \caption{Wakeup Mechanism Properties Summary}
   \label{tab:wakeup}
   \small
-  \begin{tabular}{@{}L{2.0cm}L{2.0cm}cc@{}}
+  \begin{tabular}{@{}L{1.8cm}L{1.9cm}cc@{}}
     \toprule
-    \textbf{Variant} & \textbf{Wait Strategy} & \textbf{Idle CPU} & \textbf{Syscalls/wakeup}\\
+    \textbf{Variant} & \textbf{Wait Strategy} & \textbf{Idle CPU} & \textbf{Sys/wake}\\
     \midrule
     \texttt{busy\_poll}    & Tight spin         & 100\,\%        & 0   \\
-    \texttt{spin\_backoff} & Spin + PAUSE       & High           & 0   \\
+    \texttt{spin\_back.}   & Spin+PAUSE         & High           & 0   \\
     \texttt{adaptive}      & Spin-then-futex    & Low            & 0--1 \\
-    \texttt{futex}         & FUTEX\_WAIT        & $\approx$0\,\% & 2 \\
-    \texttt{eventfd}       & poll + read        & $\approx$0\,\% & 2 \\
-    \texttt{io\_uring}     & submit\_and\_wait  & $\approx$0\,\% & 2 \\
+    \texttt{futex}         & FUTEX\_WAIT        & {$\approx$}0\,\% & 2 \\
+    \texttt{eventfd}       & poll+read          & {$\approx$}0\,\% & 2 \\
+    \texttt{io\_uring}     & sub.\_and\_wait    & {$\approx$}0\,\% & 2 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -562,8 +570,9 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
 
 \begin{table}[H]
   \centering
-  \caption{Single-Trip Ping-Pong Latency Distributions ($\mu$s). Full distributions (P90, P99.9, mean $\pm$ 95\% CI) are reported for 64\,B and 4\,KiB where the 100,000-trip raw sample was retained; 64\,KiB and 1\,MiB report P50\,/\,P99 only (see Threat~7).}
+  \caption{Single-Trip Ping-Pong Latency Distributions ($\mu$s). Full distributions (P90, P99.9, mean $\pm$ 95\% CI) at 64\,B and 4\,KiB; 64\,KiB and 1\,MiB report P50/P99 only (Threat~7).}
   \label{tab:pingpong}
+  \resizebox{\columnwidth}{!}{%
   \small
   \begin{tabular}{@{}lrrrrr@{}}
     \toprule
@@ -591,7 +600,7 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
     \texttt{unix\_socket}     & 5.008          & 5.491 & 7.433 & 10.834 & 4.867 $\pm$ 0.035 \\
     \texttt{shm (io\_uring)}  & 5.369          & 5.698 & 7.888 & 10.660 & 5.498 $\pm$ 0.005 \\
     \midrule
-    \multicolumn{6}{@{}l}{\emph{Message Size: 64\,KiB --- P50\,/\,P99 only (Threat~7)}} \\[1pt]
+    \multicolumn{6}{@{}l}{\emph{Message Size: 64\,KiB --- P50/P99 only (Threat~7)}} \\[1pt]
     \texttt{shm (busy\_poll)} & \textbf{12.995} & \multicolumn{3}{c}{\emph{---}} & 15.673 \\
     \texttt{shm (adaptive)}   & 13.476          & \multicolumn{3}{c}{\emph{---}} & 15.657 \\
     \texttt{shm (spin\_back)} & 13.311          & \multicolumn{3}{c}{\emph{---}} & 15.771 \\
@@ -602,7 +611,7 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
     \texttt{pipe}             & 19.822          & \multicolumn{3}{c}{\emph{---}} & 23.522 \\
     \texttt{posix\_mq}        & N/A             & \multicolumn{3}{c}{\emph{---}} & N/A \\
     \midrule
-    \multicolumn{6}{@{}l}{\emph{Message Size: 1\,MiB --- P50\,/\,P99 only (Threat~7)}} \\[1pt]
+    \multicolumn{6}{@{}l}{\emph{Message Size: 1\,MiB --- P50/P99 only (Threat~7)}} \\[1pt]
     \texttt{unix\_socket}     & \textbf{137.911} & \multicolumn{3}{c}{\emph{---}} & 225.035 \\
     \texttt{shm (spin\_back)} & 149.975          & \multicolumn{3}{c}{\emph{---}} & 191.538 \\
     \texttt{shm (futex)}      & 152.156          & \multicolumn{3}{c}{\emph{---}} & 190.628 \\
@@ -613,10 +622,10 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
     \texttt{pipe}             & 261.026          & \multicolumn{3}{c}{\emph{---}} & 393.990 \\
     \texttt{posix\_mq}        & N/A              & \multicolumn{3}{c}{\emph{---}} & N/A \\
     \bottomrule
-  \end{tabular}
+  \end{tabular}}
 \end{table}
 
-\begin{figure}[H]
+\begin{figure}[!t]
   \centering
   \includegraphics[width=\columnwidth]{figures/pingpong/fig_A_unloaded_latency.png}
   \caption{Depth-1 Ping-Pong P50 Latency vs.\ Message Size.  Spinning SHM
@@ -627,16 +636,16 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
   \label{fig:unloaded_lat}
 \end{figure}
 
-\begin{figure}[H]
+\begin{figure*}[!t]
   \centering
-  \includegraphics[width=\columnwidth]{figures/pingpong/fig_B_tail_latency.png}
+  \includegraphics[width=0.95\textwidth]{figures/pingpong/fig_B_tail_latency.png}
   \caption{Depth-1 Ping-Pong P99 Tail Latency vs.\ Message Size.
     \texttt{busy\_poll} sustains P99 below 0.31\,$\mu$s at 64\,B.  All
     kernel-sleeping variants cluster at 4.4--6.4\,$\mu$s at 64\,B,
     confirming the kernel scheduler---not the wakeup API---sets the tail
     latency floor.}
   \label{fig:tail_lat}
-\end{figure}
+\end{figure*}
 
 \textbf{Key observations:}
 
@@ -666,15 +675,15 @@ recycling stall that limits the SHM ring.
 Figure~\ref{fig:ablation_pingpong} isolates the six SHM wakeup variants,
 removing kernel-IPC baselines for clarity.
 
-\begin{figure}[H]
+\begin{figure*}[!t]
   \centering
-  \includegraphics[width=\columnwidth]{figures/pingpong/fig_C_ablation_latency.png}
+  \includegraphics[width=0.95\textwidth]{figures/pingpong/fig_C_ablation_latency.png}
   \caption{Ping-Pong Latency Across All Six SHM Wakeup Variants.  Spinning
     variants achieve sub-microsecond latency at small sizes; kernel-sleeping
     variants converge to 3--5\,$\mu$s.  All six converge near 150--155\,$\mu$s
     at 1\,MiB, confirming memory bandwidth as the common bottleneck.}
   \label{fig:ablation_pingpong}
-\end{figure}
+\end{figure*}
 
 The 1\,MiB convergence is instructive: copying 1\,MiB across the ring
 dominates all wakeup mechanism overhead, making wakeup selection irrelevant at
@@ -706,15 +715,15 @@ visualises the full size sweep.
   \end{tabular}
 \end{table}
 
-\begin{figure}[H]
+\begin{figure*}[!t]
   \centering
-  \includegraphics[width=\columnwidth]{figures/ablation/fig2_throughput_regime.png}
+  \includegraphics[width=0.95\textwidth]{figures/ablation/fig2_throughput_regime.png}
   \caption{Ablation Throughput Sweep.  Under saturated load, all six variants
     converge to $\approx$27\,GiB/s at 64\,KiB, confirming that wakeup
     mechanism does not affect data-path throughput.  At 1\,MiB, throughput
     drops to 9.2--9.7\,GiB/s due to fixed 64-slot ring-buffer recycling stalls.}
   \label{fig:throughput_regime}
-\end{figure}
+\end{figure*}
 
 \textbf{Key observations:}
 
@@ -743,6 +752,7 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
   \caption{Bursty-Regime Wakeup and End-to-End Latencies at 64\,B}
   \label{tab:bursty}
   \small
+  \resizebox{\columnwidth}{!}{%
   \begin{tabular}{@{}L{2.2cm}cccc@{}}
     \toprule
     \textbf{Variant} & \textbf{E2E P50} & \textbf{Wakeup P50} &
@@ -751,11 +761,11 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
     \texttt{busy\_poll}    & 0.13\,$\mu$s  & \textbf{0.012}\,$\mu$s & 100\,\%        & 0    \\
     \texttt{spin\_backoff} & 0.13\,$\mu$s  & 0.052\,$\mu$s          & High           & 0    \\
     \texttt{adaptive}      & 135.8\,$\mu$s & 1070.5\,$\mu$s         & Low            & 0.01 \\
-    \texttt{futex}         & 166.7\,$\mu$s & 1090.5\,$\mu$s         & $\approx$0\,\% & 0.02 \\
-    \texttt{eventfd}       & 166.4\,$\mu$s & 1093.9\,$\mu$s         & $\approx$0\,\% & 0.02 \\
-    \texttt{io\_uring}     & 151.0\,$\mu$s & 1104.5\,$\mu$s         & $\approx$0\,\% & 0.02 \\
+    \texttt{futex}         & 166.7\,$\mu$s & 1090.5\,$\mu$s         & {$\approx$}0\,\% & 0.02 \\
+    \texttt{eventfd}       & 166.4\,$\mu$s & 1093.9\,$\mu$s         & {$\approx$}0\,\% & 0.02 \\
+    \texttt{io\_uring}     & 151.0\,$\mu$s & 1104.5\,$\mu$s         & {$\approx$}0\,\% & 0.02 \\
     \bottomrule
-  \end{tabular}
+  \end{tabular}}
 \end{table}
 
 \begin{table}[H]
@@ -777,18 +787,38 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
   \end{tabular}
 \end{table}
 
-Table~\ref{tab:cpucost} quantifies the CPU cost side of the latency/CPU trade-off already visible qualitatively in Table~\ref{tab:bursty}. The kernel-sleeping variants (\texttt{futex}, \texttt{eventfd}, \texttt{io\_uring}) cost 9,300--11,300 cycles/message --- roughly an order of magnitude less than the spinning variants (114,789--202,011 cycles/message), because a sleeping thread consumes no cycles while blocked, whereas a spinning thread burns cycles continuously regardless of whether new data has arrived. Note that \texttt{spin\_backoff}'s higher cycle count relative to \texttt{busy\_poll} (202,011 vs.\ 114,789) does not contradict its power-saving design intent from Section~\ref{sec:wakeup_design}: the \texttt{\_mm\_pause} intrinsic inserted on every iteration deliberately reduces instructions retired per cycle (158,135 vs.\ 216,267 insn/msg, i.e.\ IPC $\approx$ 0.78 vs.\ $\approx$ 1.88), which is what actually lowers power draw at the microarchitectural level --- cycle count and power are not the same axis. \texttt{adaptive} sits at an intermediate 21,620 cycles/msg, reflecting its spin-then-block hybrid: most cycles come from the initial spin window, with the fallback futex wait contributing comparatively little once the ring is confirmed empty.
+Table~\ref{tab:cpucost} quantifies the CPU cost side of the latency/CPU
+trade-off already visible qualitatively in Table~\ref{tab:bursty}.
+The kernel-sleeping variants (\texttt{futex}, \texttt{eventfd},
+\texttt{io\discretionary{\mbox{\texttt{\_}}}{}{}uring}) cost
+9,300--11,300 cycles/message---roughly an order of magnitude less than
+the spinning variants (114,789--202,011 cycles/msg), because a sleeping
+thread consumes no cycles while blocked, whereas a spinning thread burns
+cycles continuously regardless of whether new data has arrived.
 
-\begin{figure}[H]
+Note that \texttt{spin\discretionary{\mbox{\texttt{\_}}}{}{}backoff}'s
+higher cycle count relative to \texttt{busy\discretionary{\mbox{\texttt{\_}}}{}{}poll}
+(202,011 vs.\ 114,789) does not contradict its power-saving design intent
+from Section~\ref{sec:wakeup_design}: the \texttt{\_mm\_pause} intrinsic
+inserted on every iteration deliberately reduces instructions retired per
+cycle (158,135 vs.\ 216,267 insn/msg, i.e.\ IPC~$\approx$~0.78
+vs.\ $\approx$~1.88), which is what actually lowers power draw at the
+microarchitectural level---cycle count and power are not the same axis.
+\texttt{adaptive} sits at an intermediate 21,620~cycles/msg, reflecting
+its spin-then-block hybrid: most cycles come from the initial spin window,
+with the fallback futex wait contributing comparatively little once the
+ring is confirmed empty.
+
+\begin{figure*}[!t]
   \centering
-  \includegraphics[width=\columnwidth]{figures/ablation/fig1_wakeup_latency.png}
+  \includegraphics[width=0.95\textwidth]{figures/ablation/fig1_wakeup_latency.png}
   \caption{Bursty-Regime Wakeup Latency Across Six SHM Variants.  Spinning
     variants maintain near-zero wakeup latency at 100\,\% CPU cost.
     Kernel-sleeping variants (\texttt{futex}, \texttt{eventfd},
     \texttt{io\_uring}) converge to $\approx$1090--1105\,$\mu$s under normal
     conditions (dominated by CPU frequency ramp-up from idle states).}
   \label{fig:wakeup_lat}
-\end{figure}
+\end{figure*}
 
 \textbf{The central ablation finding:}  \texttt{io\_uring}'s wakeup latency
 (1104.5\,$\mu$s P50) is indistinguishable from \texttt{futex} (1090.5\,$\mu$s)
@@ -816,13 +846,44 @@ ramp-up from an idle P-state, not by the wakeup API.
   \end{tabular}
 \end{table}
 
-As shown in Table~\ref{tab:offeredload}, under offered-load sweeps (25\%, 50\%, 75\%, 90\% of saturated capacity), spinning mechanisms (\texttt{busy\_poll} and \texttt{spin\_backoff}) maintain fixed sub-microsecond latencies regardless of offered load. For kernel-sleeping variants (\texttt{futex}, \texttt{eventfd}, \texttt{io\_uring}), median latency dynamically scales down as load increases—dropping from $\approx$1430--1452\,$\mu$s at 25\% load down to $\approx$106--107\,$\mu$s at 90\% load as CPU cores remain in active C-states for longer stretches between inter-arrival bursts. \texttt{adaptive} hybrid spinning captures the best of both worlds, reducing low-load sleep penalties while achieving pure spinning performance (0.05\,$\mu$s) under saturation.
+As shown in Table~\ref{tab:offeredload}, under offered-load sweeps
+(25\%, 50\%, 75\%, 90\% of saturated capacity), spinning mechanisms
+(\texttt{busy\discretionary{\mbox{\texttt{\_}}}{}{}poll} and
+\texttt{spin\discretionary{\mbox{\texttt{\_}}}{}{}backoff}) maintain
+fixed sub-microsecond latencies regardless of offered load.  For
+kernel-sleeping variants
+(\texttt{futex}, \texttt{eventfd}, \texttt{io\discretionary{\mbox{\texttt{\_}}}{}{}uring}),
+median latency dynamically scales down as load
+increases---dropping from $\approx$1430--1452\,$\mu$s at 25\% load
+down to $\approx$106--107\,$\mu$s at 90\% load as CPU cores remain in
+active C-states for longer stretches between inter-arrival bursts.
+\texttt{adaptive} hybrid spinning captures the best of both worlds,
+reducing low-load sleep penalties while achieving pure spinning
+performance (0.05\,$\mu$s) under saturation.
 
-The bursty-regime protocol (Table~\ref{tab:bursty}: 64-message burst, then a fixed 1\,ms idle gap) and the offered-load sweep (Table~\ref{tab:offeredload}: continuous Poisson-distributed arrivals at a fixed fraction of saturated rate) are deliberately different idle-gap structures and are not directly comparable message-for-message. The fixed 1\,ms gap in the bursty protocol is shorter than the mean inter-arrival gap implied by 25\% of saturated throughput at 64\,B, so the CPU has less time to fall to a deeper idle C-state before the next burst arrives --- producing the lower $\approx$1090--1104\,$\mu$s wakeup latency in Table~\ref{tab:bursty} relative to Table~\ref{tab:offeredload}'s 25\%-load row. As offered load rises toward saturation in Table~\ref{tab:offeredload}, the mean inter-arrival gap shrinks below the bursty protocol's fixed 1\,ms gap, which is why the 90\%-load row ($\approx$106--107\,$\mu$s) falls below the bursty-regime figures despite both nominally representing "low load" conditions in isolation. The two tables should be read as separate experimental protocols probing the same underlying C-state ramp-up effect from different angles, not as repeated measurements of the same condition.
+The bursty-regime protocol (Table~\ref{tab:bursty}: 64-message burst,
+then a fixed 1\,ms idle gap) and the offered-load sweep
+(Table~\ref{tab:offeredload}: continuous Poisson-distributed arrivals at
+a fixed fraction of saturated rate) are deliberately different idle-gap
+structures and are not directly comparable message-for-message.  The
+fixed 1\,ms gap in the bursty protocol is shorter than the mean
+inter-arrival gap implied by 25\% of saturated throughput at 64\,B, so
+the CPU has less time to fall to a deeper idle C-state before the next
+burst arrives---producing the lower
+$\approx$1090--1104\,$\mu$s wakeup latency in Table~\ref{tab:bursty}
+relative to Table~\ref{tab:offeredload}'s 25\%-load row.  As offered
+load rises toward saturation in Table~\ref{tab:offeredload}, the mean
+inter-arrival gap shrinks below the bursty protocol's fixed 1\,ms gap,
+which is why the 90\%-load row ($\approx$106--107\,$\mu$s) falls below
+the bursty-regime figures despite both nominally representing ``low
+load'' conditions in isolation.  The two tables should be read as
+separate experimental protocols probing the same underlying C-state
+ramp-up effect from different angles, not as repeated measurements of the
+same condition.
 
 \subsection{IPC Throughput vs.\ Kernel-Mediated Baselines}
 
-\begin{figure}[H]
+\begin{figure}[!t]
   \centering
   \includegraphics[width=\columnwidth]{figures/throughput.png}
   \caption{Throughput (GiB/s) vs.\ Message Size.  SHM Ring peaks at
@@ -832,7 +893,7 @@ The bursty-regime protocol (Table~\ref{tab:bursty}: 64-message burst, then a fix
   \label{fig:throughput}
 \end{figure}
 
-\begin{figure}[H]
+\begin{figure}[!t]
   \centering
   \includegraphics[width=\columnwidth]{figures/latency.png}
   \caption{Median (P50) Latency ($\mu$s, log scale) vs.\ Message Size under
@@ -842,7 +903,7 @@ The bursty-regime protocol (Table~\ref{tab:bursty}: 64-message burst, then a fix
   \label{fig:latency}
 \end{figure}
 
-\begin{figure}[H]
+\begin{figure}[!t]
   \centering
   \includegraphics[width=\columnwidth]{figures/speedup.png}
   \caption{Throughput Speed-Up Ratio (SHM Ring $\div$ Baseline).  Peak speedup
@@ -853,7 +914,7 @@ The bursty-regime protocol (Table~\ref{tab:bursty}: 64-message burst, then a fix
 
 \subsection{Cache and Memory Hierarchy Analysis}
 
-\begin{figure}[H]
+\begin{figure}[!t]
   \centering
   \includegraphics[width=\columnwidth]{figures/cache_misses.png}
   \caption{L1 D-Cache and LLC Miss Rates by IPC Mechanism.  Pipe and Socket
@@ -941,9 +1002,10 @@ speedup; the second clause explains the engineering interface choice.
   \item \textbf{Zero-penalty baseline.}  Replacing \texttt{futex} with
         \texttt{io\_uring} incurs no measurable latency regression on a
         single-channel SPSC ring, as our ping-pong data confirm.
-  \item \textbf{SQPOLL upgrade path.}  Enabling \texttt{IORING\_SETUP\_SQPOLL}
+  \item \textbf{SQPOLL upgrade path.}  Enabling
+        \texttt{IORING\-\_SETUP\-\_SQPOLL}
         requires a single flag change and eliminates the
-        \texttt{io\_uring\_enter} syscall entirely for the wakeup path,
+        \texttt{io\-\_uring\-\_enter} syscall entirely for the wakeup path,
         placing \texttt{io\_uring} between spinning and sleeping variants in
         the latency spectrum without dedicated-core overhead.
 \end{enumerate}
@@ -1194,7 +1256,7 @@ Available: \url{https://man7.org/linux/man-pages/}
 % ─────────────────────────────────────────────────────────────────────────────
 \appendix
 
-\section{Ring Buffer Memory Layout}
+\section*{Ring Buffer Memory Layout}
 
 \begin{lstlisting}[language=C++]
 // Shared memory: /dev/shm/ipc_ablation_ring  (~64 MiB total)
