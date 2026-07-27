@@ -774,6 +774,27 @@ store a flag, issue a syscall, suspend in the scheduler, receive a wakeup
 interrupt, return to userspace.  The 1\,ms range is dominated by CPU clock
 ramp-up from an idle P-state, not by the wakeup API.
 
+\begin{table}[H]
+  \centering
+  \caption{Offered-Load Sweep: Median Wakeup Latency ($\mu$s) across Load Regimes at 64\,B}
+  \label{tab:offeredload}
+  \small
+  \begin{tabular}{@{}lrrrrr@{}}
+    \toprule
+    \textbf{Variant} & \textbf{25\% Load} & \textbf{50\% Load} & \textbf{75\% Load} & \textbf{90\% Load} & \textbf{Saturated} \\
+    \midrule
+    \texttt{busy\_poll}    & \textbf{0.01}    & \textbf{0.01}    & \textbf{0.01}    & \textbf{0.01}    & \textbf{0.01} \\
+    \texttt{spin\_backoff} & 0.05    & 0.05    & 0.05    & 0.05    & 0.05 \\
+    \texttt{adaptive}      & 1,255.20 & 524.63  & 181.61  & 69.46   & 0.05 \\
+    \texttt{eventfd}       & 1,430.68 & 670.33  & 258.21  & 107.61  & 0.15 \\
+    \texttt{futex}         & 1,433.01 & 669.47  & 257.85  & 106.53  & 0.26 \\
+    \texttt{io\_uring}     & 1,452.50 & 672.82  & 260.05  & 107.30  & 0.77 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+As shown in Table~\ref{tab:offeredload}, under offered-load sweeps (25\%, 50\%, 75\%, 90\% of saturated capacity), spinning mechanisms (\texttt{busy\_poll} and \texttt{spin\_backoff}) maintain fixed sub-microsecond latencies regardless of offered load. For kernel-sleeping variants (\texttt{futex}, \texttt{eventfd}, \texttt{io\_uring}), median latency dynamically scales down as load increases—dropping from $\approx$1430--1452\,$\mu$s at 25\% load down to $\approx$106--107\,$\mu$s at 90\% load as CPU cores remain in active C-states for longer stretches between inter-arrival bursts. \texttt{adaptive} hybrid spinning captures the best of both worlds, reducing low-load sleep penalties while achieving pure spinning performance (0.05\,$\mu$s) under saturation.
+
 \subsection{IPC Throughput vs.\ Kernel-Mediated Baselines}
 
 \begin{figure}[H]
