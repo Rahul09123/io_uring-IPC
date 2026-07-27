@@ -27,7 +27,7 @@ for variant in busy_poll spin_backoff adaptive futex eventfd io_uring; do
     # Start consumer under perf stat (argv[1]=variant_int, argv[2]=csv_out)
     perf stat -e cycles,instructions,context-switches,cpu-migrations,task-clock \
         -o ../../../data/perf_${variant}_bursty_64B.txt \
-        ./ablation_consumer $V_INT /dev/null > /dev/null 2>&1 &
+        ./ablation_consumer $V_INT /dev/null &
     
     CONSUMER_PID=$!
     
@@ -37,7 +37,7 @@ for variant in busy_poll spin_backoff adaptive futex eventfd io_uring; do
 
     
     echo "  Starting producer..."
-    ./ablation_producer $V_INT bursty > /dev/null 2>&1
+    ./ablation_producer $V_INT bursty
     
     # Wait for consumer to finish processing and exit
     wait $CONSUMER_PID
