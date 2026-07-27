@@ -10,17 +10,13 @@ try:
     df = pd.read_csv(os.path.join(data_dir, "ablation_results.csv"))
     
     # Filter for size 64B
-    df_64 = df[df['size_bytes'] == 64].copy()
-    
-    # The output needs to be grouped by (variant, regime)
-    # We want columns: Variant | 25% | 50% | 75% | 90% | Saturated
-    # For both throughput (GiB/s) and median wakeup latency (us)
+    df_64 = df[df['message_size_bytes'] == 64].copy()
     
     # Pivot for throughput
-    pt_tp = df_64.pivot_table(index='variant', columns='regime', values='thr_gibps', aggfunc='mean')
+    pt_tp = df_64.pivot_table(index='wakeup_variant', columns='regime', values='throughput_gbps', aggfunc='mean')
     
     # Pivot for median wakeup latency
-    pt_lat = df_64.pivot_table(index='variant', columns='regime', values='wakeup_p50_us', aggfunc='mean')
+    pt_lat = df_64.pivot_table(index='wakeup_variant', columns='regime', values='wakeup_latency_p50_us', aggfunc='mean')
     
     # Define column order
     cols = ['offered_25', 'offered_50', 'offered_75', 'offered_90', 'saturated']
