@@ -394,6 +394,7 @@ sleep.  Steps (a) and (b) involve zero system calls; step (c) invokes at most
 one system call per wakeup event.
 
 \subsection{Pluggable Wakeup Layer: Six Ablation Variants}
+\label{sec:wakeup_design}
 
 All six variants share the identical \texttt{RingBuffer} definition.  Only the
 functions \texttt{consumer\_wait()} and \texttt{producer\_signal()} differ,
@@ -557,13 +558,11 @@ intervals use the Student-$t$ approximation on run-level means.
 
 \subsection{Unloaded Ping-Pong Latency (Suite 2)}
 
-Table~\ref{tab:pingpong} reports single-trip P50 and P99 latencies.
-Figures~\ref{fig:unloaded_lat} and~\ref{fig:tail_lat} show the sweep
-graphically.
+Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P99, P99.9, and mean $\pm$ 95\% CI) at 64\,B and 4\,KiB, and P50/P99 at 64\,KiB and 1\,MiB (Section~\ref{sec:threats}). Figures~\ref{fig:unloaded_lat} and~\ref{fig:tail_lat} show the full four-size sweep graphically.
 
 \begin{table}[H]
   \centering
-  \caption{Wakeup Latency Distributions ($\mu$s), Depth-1 Ping-Pong}
+  \caption{Wakeup Latency Distributions ($\mu$s), Depth-1 Ping-Pong. Full percentile distributions (P90, P99.9, mean $\pm$ 95\% CI) are reported for 64\,B and 4\,KiB, where the complete 100,000-trip raw sample was retained; 64\,KiB and 1\,MiB report P50/P99 only (Section~\ref{sec:threats}).}
   \label{tab:pingpong}
   \small
   \begin{tabular}{@{}lccccc@{}}
@@ -591,6 +590,28 @@ graphically.
     \texttt{pipe}             & 3.922 & 4.217 & 6.084 & 8.015 & 4.024 $\pm$ 0.004 \\
     \texttt{posix\_mq}        & 4.606 & 4.850 & 6.171 & 7.932 & 4.685 $\pm$ 0.004 \\
     \texttt{shm (io\_uring)}  & 5.369 & 5.698 & 7.888 & 10.660 & 5.498 $\pm$ 0.005 \\
+    \midrule
+    \multicolumn{6}{@{}l}{\emph{Message Size: 64\,KiB --- P50 / P99 only; full CI not yet captured (Threat~7)}} \\[2pt]
+    \texttt{shm (busy\_poll)} & \textbf{12.995} & \multicolumn{1}{c}{n/a} & 15.673 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{shm (adaptive)}   & 13.476 & \multicolumn{1}{c}{n/a} & 15.657 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{shm (spin\_back)} & 13.311 & \multicolumn{1}{c}{n/a} & 15.771 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{shm (eventfd)}    & 14.831 & \multicolumn{1}{c}{n/a} & 17.498 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{shm (futex)}      & 14.914 & \multicolumn{1}{c}{n/a} & 17.941 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{unix\_socket}     & 15.674 & \multicolumn{1}{c}{n/a} & 19.092 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{shm (io\_uring)}  & 16.171 & \multicolumn{1}{c}{n/a} & 19.525 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{pipe}             & 19.822 & \multicolumn{1}{c}{n/a} & 23.522 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{posix\_mq}        & N/A    & \multicolumn{1}{c}{n/a} & N/A    & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \midrule
+    \multicolumn{6}{@{}l}{\emph{Message Size: 1\,MiB --- P50 / P99 only; full CI not yet captured (Threat~7)}} \\[2pt]
+    \texttt{shm (spin\_back)} & \textbf{149.975} & \multicolumn{1}{c}{n/a} & 191.538 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{unix\_socket}     & \textbf{137.911} & \multicolumn{1}{c}{n/a} & 225.035 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{shm (futex)}      & 152.156 & \multicolumn{1}{c}{n/a} & 190.628 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{shm (adaptive)}   & 152.353 & \multicolumn{1}{c}{n/a} & 180.919 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{shm (busy\_poll)} & 152.540 & \multicolumn{1}{c}{n/a} & 214.523 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{shm (eventfd)}    & 152.591 & \multicolumn{1}{c}{n/a} & 190.589 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{shm (io\_uring)}  & 154.707 & \multicolumn{1}{c}{n/a} & 212.985 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{pipe}             & 261.026 & \multicolumn{1}{c}{n/a} & 393.990 & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
+    \texttt{posix\_mq}        & N/A     & \multicolumn{1}{c}{n/a} & N/A     & \multicolumn{1}{c}{n/a} & \multicolumn{1}{c}{n/a} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -627,9 +648,9 @@ running requires dequeueing, CPU selection, and context switching---costing
 2--4\,$\mu$s on a loaded Linux system.
 
 \textbf{(2) Kernel-sleeping variants converge regardless of primitive.}
-\texttt{futex} (3.21\,$\mu$s), \texttt{eventfd} (3.11\,$\mu$s), and
-\texttt{io\_uring} (4.37\,$\mu$s) all converge to 3--4.5\,$\mu$s P50 at 64\,B.
-The slight elevation of \texttt{io\_uring} reflects SQ/CQ ring entry overhead.
+\texttt{futex} (3.207\,$\mu$s), \texttt{eventfd} (3.113\,$\mu$s), and
+\texttt{io\_uring} (4.542\,$\mu$s) all converge to 3--4.5\,$\mu$s P50 at 64\,B.
+The slight elevation of \texttt{io\_uring} reflects SQ/CQ ring entry overhead. (These figures are recomputed from the full 100,000-trip raw distribution underlying Table~\ref{tab:pingpong}; the \texttt{io\_uring} value differs marginally from earlier aggregate-based estimates reported in preliminary analysis.)
 
 \textbf{(3) POSIX MQ silently fails at large messages.}
 POSIX MQ returns an error for payloads $\geq$16\,KiB due to the kernel default
@@ -756,6 +777,8 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
   \end{tabular}
 \end{table}
 
+Table~\ref{tab:cpucost} quantifies the CPU cost side of the latency/CPU trade-off already visible qualitatively in Table~\ref{tab:bursty}. The kernel-sleeping variants (\texttt{futex}, \texttt{eventfd}, \texttt{io\_uring}) cost 9,300--11,300 cycles/message --- roughly an order of magnitude less than the spinning variants (114,789--202,011 cycles/message), because a sleeping thread consumes no cycles while blocked, whereas a spinning thread burns cycles continuously regardless of whether new data has arrived. Note that \texttt{spin\_backoff}'s higher cycle count relative to \texttt{busy\_poll} (202,011 vs.\ 114,789) does not contradict its power-saving design intent from Section~\ref{sec:wakeup_design}: the \texttt{\_mm\_pause} intrinsic inserted on every iteration deliberately reduces instructions retired per cycle (158,135 vs.\ 216,267 insn/msg, i.e.\ IPC $\approx$ 0.78 vs.\ $\approx$ 1.88), which is what actually lowers power draw at the microarchitectural level --- cycle count and power are not the same axis. \texttt{adaptive} sits at an intermediate 21,620 cycles/msg, reflecting its spin-then-block hybrid: most cycles come from the initial spin window, with the fallback futex wait contributing comparatively little once the ring is confirmed empty.
+
 \begin{figure}[H]
   \centering
   \includegraphics[width=\columnwidth]{figures/ablation/fig1_wakeup_latency.png}
@@ -794,6 +817,8 @@ ramp-up from an idle P-state, not by the wakeup API.
 \end{table}
 
 As shown in Table~\ref{tab:offeredload}, under offered-load sweeps (25\%, 50\%, 75\%, 90\% of saturated capacity), spinning mechanisms (\texttt{busy\_poll} and \texttt{spin\_backoff}) maintain fixed sub-microsecond latencies regardless of offered load. For kernel-sleeping variants (\texttt{futex}, \texttt{eventfd}, \texttt{io\_uring}), median latency dynamically scales down as load increases—dropping from $\approx$1430--1452\,$\mu$s at 25\% load down to $\approx$106--107\,$\mu$s at 90\% load as CPU cores remain in active C-states for longer stretches between inter-arrival bursts. \texttt{adaptive} hybrid spinning captures the best of both worlds, reducing low-load sleep penalties while achieving pure spinning performance (0.05\,$\mu$s) under saturation.
+
+The bursty-regime protocol (Table~\ref{tab:bursty}: 64-message burst, then a fixed 1\,ms idle gap) and the offered-load sweep (Table~\ref{tab:offeredload}: continuous Poisson-distributed arrivals at a fixed fraction of saturated rate) are deliberately different idle-gap structures and are not directly comparable message-for-message. The fixed 1\,ms gap in the bursty protocol is shorter than the mean inter-arrival gap implied by 25\% of saturated throughput at 64\,B, so the CPU has less time to fall to a deeper idle C-state before the next burst arrives --- producing the lower $\approx$1090--1104\,$\mu$s wakeup latency in Table~\ref{tab:bursty} relative to Table~\ref{tab:offeredload}'s 25\%-load row. As offered load rises toward saturation in Table~\ref{tab:offeredload}, the mean inter-arrival gap shrinks below the bursty protocol's fixed 1\,ms gap, which is why the 90\%-load row ($\approx$106--107\,$\mu$s) falls below the bursty-regime figures despite both nominally representing "low load" conditions in isolation. The two tables should be read as separate experimental protocols probing the same underlying C-state ramp-up effect from different angles, not as repeated measurements of the same condition.
 
 \subsection{IPC Throughput vs.\ Kernel-Mediated Baselines}
 
@@ -1010,6 +1035,7 @@ our results confirm it is the optimal strategy.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Threats to Validity}
+\label{sec:threats}
 
 \begin{enumerate}
   \item \textbf{Single node and microarchitecture.}  All experiments ran on one
@@ -1039,6 +1065,12 @@ our results confirm it is the optimal strategy.
         experiments use default interrupt mode (\texttt{flags~=~0}).  SQPOLL
         mode would eliminate the wakeup syscall entirely but requires
         \texttt{CAP\_SYS\_ADMIN}, unavailable in our environment.
+
+  \item \textbf{Full tail-percentile capture range.} Full tail-percentile
+        capture (P90, P99.9, CI) is currently limited to 64\,B and 4\,KiB
+        payloads; extending raw per-trip logging to 64\,KiB and 1\,MiB is
+        planned future work and does not affect the P50/P99 comparisons
+        already reported at those sizes.
 \end{enumerate}
 
 % ─────────────────────────────────────────────────────────────────────────────
