@@ -17,8 +17,8 @@ if dfs:
     # Concatenate all DataFrames
     all_data = pd.concat(dfs, ignore_index=True)
     
-    # Filter for size 64 and 4096 (the sizes typically used in the tables)
-    filtered = all_data[all_data['message_size_bytes'].isin([64, 4096])]
+    # Filter for size 64 and 4096 (the sizes typically used in the tables) as well as 65536 (64 KiB) and 1048576 (1 MiB) for Threat 7
+    filtered = all_data[all_data['message_size_bytes'].isin([64, 4096, 65536, 1048576])]
     
     # Sort for consistent output
     sorted_data = filtered.sort_values(by=['message_size_bytes', 'ipc_type', 'wakeup_variant'])

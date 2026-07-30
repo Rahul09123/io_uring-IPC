@@ -70,7 +70,6 @@ def group_by(rows, *keys):
 # ─────────────────────────────────────────────────────────────────────────────
 def fig1_wakeup_latency(rows, outdir):
     fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=False)
-    fig.suptitle("Figure 1 — Wakeup Latency by Variant × Regime", fontsize=13, y=1.01)
 
     for ax, metric, ylabel, title in zip(
         axes,
@@ -120,7 +119,6 @@ def fig1_wakeup_latency(rows, outdir):
 # ─────────────────────────────────────────────────────────────────────────────
 def fig2_throughput_regime(rows, outdir):
     fig, ax = plt.subplots(figsize=(12, 5))
-    fig.suptitle("Figure 2 — Throughput by Variant × Regime", fontsize=13)
 
     n_v = len(VARIANT_ORDER)
     n_r = len(REGIME_ORDER)
@@ -139,7 +137,7 @@ def fig2_throughput_regime(rows, outdir):
         ax.bar(x + offset, vals, width, label=vlabel,
                color=V_COLOR[vname], alpha=0.85, edgecolor="white", linewidth=0.5)
 
-    ax.set_title("Throughput Convergence Under Saturation, Divergence Under Bursty Load")
+    ax.set_title("")
     ax.set_xlabel("Regime")
     ax.set_ylabel("Throughput (GB/s)")
     ax.set_xticks(x)
@@ -159,7 +157,6 @@ def fig2_throughput_regime(rows, outdir):
 # ─────────────────────────────────────────────────────────────────────────────
 def fig3_cpu_latency_pareto(rows, outdir):
     fig, ax = plt.subplots(figsize=(9, 6))
-    fig.suptitle("Figure 3 — CPU Cost vs. Wakeup Latency Pareto", fontsize=13)
 
     for vname, vlabel in zip(VARIANT_ORDER, VARIANT_LABELS):
         subset = [row for row in rows if row.get("wakeup_variant") == vname]
@@ -167,8 +164,9 @@ def fig3_cpu_latency_pareto(rows, outdir):
             continue
         xs = [safe_float(r, "cpu_us_per_msg") for r in subset]
         ys = [safe_float(r, "wakeup_latency_p50_us") for r in subset]
-        xs = [x for x, y in zip(xs, ys) if x > 0 and y > 0]
-        ys = [y for x, y in zip(xs, ys) if x > 0 and y > 0]
+        pairs = [(x, y) for x, y in zip(xs, ys) if x > 0 and y > 0]
+        xs = [x for x, y in pairs]
+        ys = [y for x, y in pairs]
         if not xs:
             continue
         ax.scatter(xs, ys, label=vlabel, color=V_COLOR[vname],
@@ -182,7 +180,7 @@ def fig3_cpu_latency_pareto(rows, outdir):
 
     ax.set_xlabel("CPU µs / message")
     ax.set_ylabel("Wakeup Latency p50 (µs)")
-    ax.set_title("Lower-left = ideal; Busy-poll: low latency, high CPU; Futex/io_uring: high latency, low CPU")
+    ax.set_title("")
     ax.grid(True)
     ax.legend(fontsize=8)
 
@@ -221,7 +219,6 @@ def parse_perf_stat(path: str) -> dict:
 
 def fig4_syscalls(perf_data: dict, rows: list, outdir: str):
     fig, ax = plt.subplots(figsize=(10, 5))
-    fig.suptitle("Figure 4 — Syscalls per Message by Variant (perf stat)", fontsize=13)
 
     if not perf_data:
         ax.text(0.5, 0.5, "No perf stat data available.\n"
@@ -252,7 +249,7 @@ def fig4_syscalls(perf_data: dict, rows: list, outdir: str):
     ax.set_xticks(x)
     ax.set_xticklabels(VARIANT_LABELS, rotation=15, ha="right")
     ax.set_ylabel("Total Syscalls per Run")
-    ax.set_title("io_uring and EventFD incur kernel entries; Busy-Poll / SpinBackoff incur ~0")
+    ax.set_title("")
     ax.grid(axis="y")
     for bar, val in zip(bars, means):
         if val > 0:
@@ -271,7 +268,6 @@ def fig4_syscalls(perf_data: dict, rows: list, outdir: str):
 # ─────────────────────────────────────────────────────────────────────────────
 def fig5_e2e_latency(rows, outdir):
     fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=False)
-    fig.suptitle("Figure 5 — End-to-End Latency vs. Message Size", fontsize=13)
 
     for ax, regime, rlabel in [
         (axes[0], "saturated", "Saturated"),
