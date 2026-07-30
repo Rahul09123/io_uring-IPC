@@ -127,12 +127,7 @@ def fig_A(rows: list[dict], outdir: str):
         ax.set_xticklabels(SIZE_LABELS, rotation=25, ha="right")
         ax.set_xlabel("Message Size")
         ax.set_ylabel("One-Way Latency ≈ RTT/2  (µs,  log scale)")
-        ax.set_title(
-            "Figure A — Unloaded Latency vs. Message Size  [depth-1 ping-pong, "
-            "CLOCK_MONOTONIC_RAW]\n"
-            "Error bars: P90 (lower) and P99 (upper)",
-            fontsize=10
-        )
+        ax.set_title("")
         ax.grid(True, which="both")
         ax.legend(fontsize=9)
 
@@ -157,11 +152,6 @@ def fig_B(rows: list[dict], outdir: str):
     One bar group per small (64B) and large (1KB) message size."""
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 6), sharey=False)
-    fig.suptitle(
-        "Figure B — Tail Latency Comparison  (P99 and P99.9)\n"
-        "Lower is better. Systems reviewers focus on tail latency for real-time use cases.",
-        fontsize=10, y=1.02
-    )
 
     FOCUS_SIZES = [64, 1024]
     FOCUS_LABELS = ["64 B (scheduling-dominated)", "1 KB (mixed)"]
@@ -224,11 +214,6 @@ def fig_C(rows: list[dict], outdir: str):
     This directly shows futex vs. io_uring latency in the latency-focused mode."""
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 6), sharey=False)
-    fig.suptitle(
-        "Figure C — Wakeup Variant Ping-Pong Latency  (SHM, depth-1)\n"
-        "Error bars: P99. Shows scheduling overhead per wakeup mechanism.",
-        fontsize=10, y=1.02
-    )
 
     ablation_rows = [r for r in rows if r.get("ipc_type") == "shm_ablation"]
 
