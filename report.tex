@@ -150,7 +150,7 @@ gains. Spinning variants achieve median single-trip latencies of
 364--371\,ns at 64\,B---a 14.8$\times$ improvement over pipe or
 socket---and peak streaming throughput of 27.88\,GiB/s at 64\,KiB.
 In depth-1 ping-pong tests (Suite 2), io\_uring incurs a modest per-event
-ring submission overhead (+1.3\,$\mu$s over futex/eventfd at 64\,B).
+ring submission overhead (+2.8\,$\mu$s over futex at 64\,B).
 However, under bursty wakeup conditions (Suite 1), where wakeups occur when the
 ring empties, io\_uring performs on par with futex and
 eventfd ($\approx$1.09--1.10\,ms median wakeup latency with
@@ -732,10 +732,13 @@ never invoked.  All six variants produce statistically identical throughput at
 This gain originates entirely from eliminating kernel copies and context
 switches on the data path.
 
-\textbf{(3) 1\,MiB throughput inversion.}
-Throughput drops to 9.2--9.7\,GiB/s because the fixed 64-slot ring stalls the
-producer once all slots are occupied (discussed further in
-Section~\ref{sec:discussion}).
+\textbf{(3) 1\,MiB throughput inversion and io\_uring outlier.}
+Five variants sustain 8.77--9.18\,GiB/s, consistent with the fixed 64-slot
+ring stalling the producer once all slots are occupied. Interrupt-mode
+\texttt{io\_uring} is a separate, stable outlier at 4.66\,GiB/s; all 15 raw
+runs fall between 4.50 and 4.81\,GiB/s. This result is reported explicitly
+but requires targeted instrumentation before attributing it to a particular
+SQE/CQE or scheduler cost.
 
 \textbf{(4) Small-message io\_uring overhead at 64\,B.}
 At 64\,B payload, \texttt{io\_uring}'s saturated throughput is 0.178\,GiB/s,
@@ -868,7 +871,7 @@ compared to \texttt{futex}/\texttt{eventfd} reflects the constant overhead of
 SQE/CQE ring management on the non-blocking fast path.
 \texttt{adaptive} hybrid spinning captures the best of both worlds,
 reducing low-load sleep penalties while achieving pure spinning
-performance (0.05\,$\mu$s) under saturation.
+performance (0.09\,$\mu$s) under saturation.
 
 The bursty-regime protocol (Table~\ref{tab:bursty}: 64-message burst,
 then a fixed 1\,ms idle gap) and the offered-load sweep
@@ -899,16 +902,19 @@ it against standard Linux kernel-mediated IPC mechanisms across a payload size s
 Figure~\ref{fig:throughput} compares overall streaming throughput. The SHM ring achieves
 peak throughput of 27.88\,GiB/s at 64\,KiB, outperforming POSIX Pipe (5.1\,GiB/s) by 5.46$\times$
 and UNIX Domain Socket (4.3\,GiB/s) by 6.46$\times$. At 1\,MiB, UNIX Sockets (11.1\,GiB/s)
-and POSIX MQ (10.9\,GiB/s) slightly exceed the SHM ring (9.7\,GiB/s) due to fixed ring-slot
-recycling stalls (analysed in Section~\ref{sec:discussion}).
+and POSIX MQ (10.9\,GiB/s) slightly exceed the five non-\texttt{io\_uring} SHM
+variants (8.77--9.18\,GiB/s) due to fixed ring-slot recycling stalls. The
+separate 4.66\,GiB/s interrupt-mode \texttt{io\_uring} result is analysed in
+Section~\ref{sec:discussion}.
 
 \begin{figure}[!t]
   \centering
   \includegraphics[width=\columnwidth]{figures/throughput.png}
   \caption{Throughput (GiB/s) vs.\ Message Size.  SHM Ring peaks at
     27.88\,GiB/s at 64\,KiB vs.\ Pipe's 5.1\,GiB/s.  At 1\,MiB, UNIX
-    Socket (11.1\,GiB/s) and POSIX MQ (10.9\,GiB/s) overtake the ring
-    (9.7\,GiB/s) due to fixed ring-slot depth.}
+    Socket (11.1\,GiB/s) and POSIX MQ (10.9\,GiB/s) exceed the five
+    non-\texttt{io\_uring} SHM variants (8.77--9.18\,GiB/s). Interrupt-mode
+    \texttt{io\_uring} is a separate 4.66\,GiB/s result discussed in text.}
   \label{fig:throughput}
 \end{figure}
 
@@ -1003,8 +1009,9 @@ buffer uses page-flipping without per-slot recycling stalls.
 \subsection{Ring-Depth Constraint at 1 MiB}
 
 The throughput inversion at 1\,MiB---where UNIX Socket (11.1\,GiB/s) and
-POSIX MQ (10.9\,GiB/s) overtake the SHM ring (9.7\,GiB/s)---is a direct
-consequence of the fixed 64-slot ring geometry.  With each slot sized at
+POSIX MQ (10.9\,GiB/s) exceed the five non-\texttt{io\_uring} SHM variants
+(8.77--9.18\,GiB/s)---is consistent with the fixed 64-slot ring geometry.
+With each slot sized at
 1\,MiB, the ring holds at most 64\,MiB of in-flight data.  The producer stalls
 as soon as all 64 slots are occupied while the consumer processes each 1\,MiB
 slot sequentially.
@@ -1017,10 +1024,20 @@ Steady-state throughput is bounded by the consumer's per-slot service rate:
 \]
 When $T_c$ is dominated by the consumer checksum+timestamp operation
 ($\approx$102.4\,$\mu$s per 1\,MiB slot at 10\,GB/s memory bandwidth), maximum
-ring throughput is bounded by $\approx$9.7\,GiB/s---matching our measured value.
+ring throughput is bounded by $\approx$9.7\,GiB/s---consistent with the
+8.77--9.18\,GiB/s results for the non-\texttt{io\_uring} variants.
 The fixed $N = 64$ slot count bounds total in-flight buffering ($64 \times 1\,\text{MiB} = 64\,\text{MiB}$),
 forcing the producer to stall whenever consumer processing lags behind the producer fill rate.
 The socket kernel buffer, by contrast, effectively provides unlimited in-flight depth by spilling to physical DRAM, bypassing the slot-count constraint.
+
+\textbf{Interrupt-mode io\_uring outlier.}  The 4.66\,GiB/s io\_uring
+result is not explained by ring depth alone: it is approximately half the
+throughput of the other SHM wakeup variants, and all 15 raw runs lie in the
+narrow 4.50--4.81\,GiB/s range.  This makes a single anomalous run unlikely,
+but the present measurements do not isolate whether submission/completion
+processing, FIFO signaling, or scheduling is responsible.  We therefore report
+the value as a stable configuration-specific observation and reserve causal
+attribution for a targeted repeat with profiling and frequency pinning.
 
 Increasing \texttt{NUM\_SLOTS} to 256 would raise the in-flight capacity to
 256\,MiB and likely recover the throughput advantage at 1\,MiB.  The total
@@ -1116,8 +1133,8 @@ we isolated the true contribution of \texttt{io\_uring} to IPC latency.
 
   \item \textbf{Interrupt-mode wakeup result is deliberately scoped.}
         In strict depth-1 ping-pong, interrupt-mode \texttt{io\_uring} pays a
-        modest +1.3\,$\mu$s per-event SQE submission overhead relative to
-        futex/eventfd.  The available bursty data show similar values for
+        modest +2.8\,$\mu$s per-event SQE submission overhead relative to
+        futex.  The available bursty data show similar values for
         all kernel-sleeping variants, but the frequency-pinned replication is
         required before that observation can be promoted to a conclusion.
 
