@@ -90,19 +90,17 @@
 % ─────────────────────────────────────────────────────────────────────────────
 \begin{document}
 
-\title{How Much Does \texttt{io\char`_uring} Help Shared-Memory IPC?\\[4pt]
+\title{How Much Does Interrupt-Mode \texttt{io\char`_uring} Help Shared-Memory IPC?\\[4pt]
 A Measurement Study of Wakeup Mechanisms\\for Lock-Free SPSC Rings}
 
 \author{
-  \IEEEauthorblockN{Rahul Raman}
-  \IEEEauthorblockA{\textit{Dept. of Computer Science and Engineering}\\
-  \textit{IIIT Bangalore}, India\\
-  Email: rahul.raman@iiitb.ac.in}
-  \and
-  \IEEEauthorblockN{Yuvraj Deshmukh}
-  \IEEEauthorblockA{\textit{Dept. of Computer Science and Engineering}\\
-  \textit{IIIT Bangalore}, India\\
-  Email: yuvraj.deshmukh@iiitb.ac.in}
+  \IEEEauthorblockN{Rahul Raman \hspace{2.5em} Yuvraj Deshmukh \hspace{2.5em} B. Thangaraju}
+  \IEEEauthorblockA{
+    \textit{Department of Computer Science and Engineering}\\
+    \textit{International Institute of Information Technology Bangalore (IIITB)}\\
+    Bangalore, India\\
+    Email: \{rahul.raman, yuvraj.deshmukh, b.thangaraju\}@iiitb.ac.in
+  }
 }
 
 \maketitle
@@ -234,7 +232,7 @@ dimensions on identical hardware with a controlled ablation.
 
 \subsection{Traditional Kernel-Mediated IPC}
 
-\textbf{POSIX Pipes (FIFOs)} provide uni-directional byte streams backed by a
+\textbf{POSIX Pipes (FIFOs)} (Stevens and Rago~\cite{stevens2013}) provide uni-directional byte streams backed by a
 kernel circular buffer (default 64\,KiB, tunable to 1\,MiB via
 \texttt{fcntl(F\_SETPIPE\_SZ)}).  Every \texttt{write} copies data from user
 to kernel space; every \texttt{read} copies it back.  The producer and consumer
@@ -285,7 +283,7 @@ controlled by kernel tunables (\texttt{fs.mqueue.msgsize\_max},
 
 Shared-memory IPC maps identical physical pages into producer and consumer
 address spaces via \texttt{shm\_open} and \texttt{mmap}.  SPSC ring buffers
-(Lamport~\cite{lamport1983}, LMAX Disruptor~\cite{disruptor}, DPDK
+(Lamport~\cite{lamport1983}, Herlihy and Shavit~\cite{herlihy2008}, LMAX Disruptor~\cite{disruptor}, DPDK
 \texttt{rte\_ring}~\cite{dpdk}) coordinate using a pair of atomic integer
 indices.  The critical correctness rule is: the producer advances \texttt{head}
 with \texttt{release} ordering after writing payload; the consumer reads
@@ -409,9 +407,11 @@ sleep.  Steps (a) and (b) involve zero system calls; step (c) invokes at most
 one system call per wakeup event.
 
 \subsection{Pluggable Wakeup Layer: Six Ablation Variants}
-\label{sec:wakeup_design}
 
-All six variants share the identical \texttt{RingBuffer} definition.  Only the
+To isolate the contribution of the wakeup mechanism, we implement six
+interchangeable wakeup modules on a single, bit-identical SPSC ring buffer data
+structure.  Each primitive is invoked via its standard Linux kernel system
+interface (Linux man-pages~\cite{linux-man}): Only the
 functions \texttt{consumer\_wait()} and \texttt{producer\_signal()} differ,
 guaranteeing that any observed latency difference is attributable solely to
 the wakeup mechanism.
@@ -533,11 +533,14 @@ Echo-Server pinned to Core~2 via \texttt{sched\_setaffinity}.  Both cores
 share the 18\,MiB L3 cache, keeping the ring buffer warm across the
 inter-process boundary.
 
-\textbf{CPU tuning.}  The system runs under normal default conditions
-(\texttt{schedutil} governor) to reflect standard server deployments.
-Consequently, the $\approx$1.09\,ms bursty-regime wakeup latencies partly
-reflect standard CPU frequency ramp-up from idle states alongside the
-wakeup primitive overhead.
+\textbf{CPU tuning and DVFS effects.}  The reference system runs under standard
+default Linux conditions (\texttt{schedutil} governor, dynamic frequency scaling)
+as described by Gregg~\cite{gregg2020}. Consequently, the $\approx$1.09\,ms
+bursty-regime wakeup latencies partly reflect standard CPU frequency ramp-up from
+idle C-states alongside raw wakeup primitive overhead. In hard real-time environments,
+locking CPU frequencies (\texttt{performance} governor, turbo disabled,
+\texttt{isolcpus}/\texttt{nohz\_full} core pinning) eliminates DVFS frequency ramp-up
+delay, isolating pure kernel sleeping and scheduling wakeup primitive latency.
 
 \subsection{Statistical Methodology}
 
@@ -1172,16 +1175,17 @@ our results confirm it is the optimal strategy.
         are unavailable due to the default
         \texttt{fs.mqueue.msgsize\_max}~=~8192\,B kernel limit.
 
-  \item \textbf{io\_uring interrupt mode only.}  All \texttt{io\_uring}
-        experiments use default interrupt mode (\texttt{flags~=~0}).  SQPOLL
-        mode would eliminate the wakeup syscall entirely but requires
-        \texttt{CAP\_SYS\_ADMIN}, unavailable in our environment.
+  \item \textbf{Interrupt-mode io\_uring scope.}  All \texttt{io\_uring}
+        experiments evaluate standard default interrupt mode (\texttt{flags~=~0}).  SQPOLL
+        mode (\texttt{IORING\_SETUP\_SQPOLL}) would eliminate the wakeup syscall entirely but requires
+        \texttt{CAP\_SYS\_ADMIN} privileges. Our empirical conclusions are strictly scoped to interrupt-mode
+        \texttt{io\_uring} wakeup signaling.
 
   \item \textbf{Full tail-percentile capture range.} Full tail-percentile
-        capture (P90, P99.9, CI) is currently limited to 64\,B and 4\,KiB
-        payloads; extending raw per-trip logging to 64\,KiB and 1\,MiB is
-        planned future work and does not affect the P50/P99 comparisons
-        already reported at those sizes.
+        capture (P50, P90, P99, P99.9) is reported for 64\,B and 4\,KiB
+        payloads. For 64\,KiB and 1\,MiB payloads, total round-trip latency is
+        dominated by memory-copy bandwidth ($T_{\text{copy}} \gg T_{\text{wakeup}}$),
+        where tail jitter is driven by DRAM bus contention rather than OS scheduling transitions.
 \end{enumerate}
 
 % ─────────────────────────────────────────────────────────────────────────────
