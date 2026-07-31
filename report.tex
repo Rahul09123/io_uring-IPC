@@ -453,7 +453,10 @@ in \texttt{io\-\_uring\-\_submit\-\_and\-\_wait\-(ring,~1)}.  The
 producer submits an \texttt{IORING\-\_OP\-\_WRITE} SQE to the same FIFO
 and calls \texttt{io\-\_uring\-\_submit}.  The \texttt{io\-\_uring}
 context can simultaneously monitor additional FDs, making it advantageous
-for frameworks managing many concurrent channels.
+for frameworks managing many concurrent channels.  Our primary ablation evaluates
+standard interrupt mode (\texttt{flags=0}); additionally, the implementation provides
+runtime support for \texttt{IORING\_SETUP\_SQPOLL} (SQPOLL mode via \texttt{USE\_SQPOLL=1}),
+which offloads ring polling to an asynchronous kernel thread under \texttt{CAP\_SYS\_ADMIN}.
 
 \begin{table}[H]
   \centering

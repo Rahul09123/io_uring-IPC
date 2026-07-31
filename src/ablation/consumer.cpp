@@ -261,7 +261,18 @@ int main(int argc, char* argv[]) {
         close(listen_fd);
         unlink(EVENTFD_SOCKET_PATH);
     } else if (variant == IO_URING) {
-        io_uring_queue_init(256, &ring, 0);
+        uint32_t flags = 0;
+        if (const char* env = std::getenv("USE_SQPOLL")) {
+            if (std::atoi(env) == 1) flags |= IORING_SETUP_SQPOLL;
+        }
+        if (io_uring_queue_init(256, &ring, flags) < 0) {
+            if (flags & IORING_SETUP_SQPOLL) {
+                std::perror("SQPOLL mode failed (requires CAP_SYS_ADMIN), falling back to interrupt mode");
+                io_uring_queue_init(256, &ring, 0);
+            } else {
+                std::perror("io_uring_queue_init"); return 1;
+            }
+        }
         mkfifo(SIGNAL_PATH, 0666);
         ws.fifo_fd = open(SIGNAL_PATH, O_RDWR);
         if (ws.fifo_fd < 0) { std::perror("open fifo"); return 1; }

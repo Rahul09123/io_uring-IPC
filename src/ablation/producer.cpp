@@ -193,8 +193,17 @@ int main(int argc, char* argv[]) {
         close(sock_fd);
         if (ws.eventfd_fd < 0) { std::perror("recv_fd eventfd"); return 1; }
     } else if (variant == IO_URING) {
-        if (io_uring_queue_init(64, &ring, 0) < 0) {
-            std::perror("io_uring_queue_init"); return 1;
+        uint32_t flags = 0;
+        if (const char* env = std::getenv("USE_SQPOLL")) {
+            if (std::atoi(env) == 1) flags |= IORING_SETUP_SQPOLL;
+        }
+        if (io_uring_queue_init(64, &ring, flags) < 0) {
+            if (flags & IORING_SETUP_SQPOLL) {
+                std::perror("SQPOLL mode failed (requires CAP_SYS_ADMIN), falling back to interrupt mode");
+                io_uring_queue_init(64, &ring, 0);
+            } else {
+                std::perror("io_uring_queue_init"); return 1;
+            }
         }
         // Wait for FIFO to be created by consumer
         for (int retry = 0; retry < 50; ++retry) {
