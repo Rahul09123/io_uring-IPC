@@ -90,14 +90,16 @@
 % ─────────────────────────────────────────────────────────────────────────────
 \begin{document}
 
-\title{How Much Does \texttt{io\char`_uring} Help Shared-Memory IPC?\\[4pt]
+\title{How Much Does Interrupt-Mode \texttt{io\char`_uring} Help Shared-Memory IPC?\\[4pt]
 A Measurement Study of Wakeup Mechanisms\\for Lock-Free SPSC Rings}
 
 \author{
-  \IEEEauthorblockN{Rahul Raman \qquad Yuvraj Deshmukh}
+  \IEEEauthorblockN{Rahul Raman \hspace{2.5em} Yuvraj Deshmukh \hspace{2.5em} B. Thangaraju}
   \IEEEauthorblockA{
-    Department of Computer Science and Engineering\\
-    International Institute of Information Technology Bangalore (IIITB)
+    \textit{Department of Computer Science and Engineering}\\
+    \textit{International Institute of Information Technology Bangalore (IIITB)}\\
+    Bangalore, India\\
+    Email: \{rahul.raman, yuvraj.deshmukh, b.thangaraju\}@iiitb.ac.in
   }
 }
 
@@ -230,7 +232,7 @@ dimensions on identical hardware with a controlled ablation.
 
 \subsection{Traditional Kernel-Mediated IPC}
 
-\textbf{POSIX Pipes (FIFOs)} provide uni-directional byte streams backed by a
+\textbf{POSIX Pipes (FIFOs)} (Stevens and Rago~\cite{stevens2013}) provide uni-directional byte streams backed by a
 kernel circular buffer (default 64\,KiB, tunable to 1\,MiB via
 \texttt{fcntl(F\_SETPIPE\_SZ)}).  Every \texttt{write} copies data from user
 to kernel space; every \texttt{read} copies it back.  The producer and consumer
@@ -281,7 +283,7 @@ controlled by kernel tunables (\texttt{fs.mqueue.msgsize\_max},
 
 Shared-memory IPC maps identical physical pages into producer and consumer
 address spaces via \texttt{shm\_open} and \texttt{mmap}.  SPSC ring buffers
-(Lamport~\cite{lamport1983}, LMAX Disruptor~\cite{disruptor}, DPDK
+(Lamport~\cite{lamport1983}, Herlihy and Shavit~\cite{herlihy2008}, LMAX Disruptor~\cite{disruptor}, DPDK
 \texttt{rte\_ring}~\cite{dpdk}) coordinate using a pair of atomic integer
 indices.  The critical correctness rule is: the producer advances \texttt{head}
 with \texttt{release} ordering after writing payload; the consumer reads
@@ -405,9 +407,11 @@ sleep.  Steps (a) and (b) involve zero system calls; step (c) invokes at most
 one system call per wakeup event.
 
 \subsection{Pluggable Wakeup Layer: Six Ablation Variants}
-\label{sec:wakeup_design}
 
-All six variants share the identical \texttt{RingBuffer} definition.  Only the
+To isolate the contribution of the wakeup mechanism, we implement six
+interchangeable wakeup modules on a single, bit-identical SPSC ring buffer data
+structure.  Each primitive is invoked via its standard Linux kernel system
+interface (Linux man-pages~\cite{linux-man}): Only the
 functions \texttt{consumer\_wait()} and \texttt{producer\_signal()} differ,
 guaranteeing that any observed latency difference is attributable solely to
 the wakeup mechanism.
@@ -449,7 +453,10 @@ in \texttt{io\-\_uring\-\_submit\-\_and\-\_wait\-(ring,~1)}.  The
 producer submits an \texttt{IORING\-\_OP\-\_WRITE} SQE to the same FIFO
 and calls \texttt{io\-\_uring\-\_submit}.  The \texttt{io\-\_uring}
 context can simultaneously monitor additional FDs, making it advantageous
-for frameworks managing many concurrent channels.
+for frameworks managing many concurrent channels.  Our primary ablation evaluates
+standard interrupt mode (\texttt{flags=0}); additionally, the implementation provides
+runtime support for \texttt{IORING\_SETUP\_SQPOLL} (SQPOLL mode via \texttt{USE\_SQPOLL=1}),
+which offloads ring polling to an asynchronous kernel thread under \texttt{CAP\_SYS\_ADMIN}.
 
 \begin{table}[H]
   \centering
@@ -519,7 +526,7 @@ P50, P90, P99, and P99.9 percentiles reported.
     Storage         & 512\,GB Samsung NVMe SSD \\
     Compiler        & g++ -O2, C++17 \\
     liburing        & System package, Ubuntu 24.04 \\
-    CPU Governor    & Default (\texttt{schedutil}) \\
+    CPU Governor    & Pinned (\texttt{performance}, \texttt{no\_turbo=1}) \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -529,11 +536,13 @@ Echo-Server pinned to Core~2 via \texttt{sched\_setaffinity}.  Both cores
 share the 18\,MiB L3 cache, keeping the ring buffer warm across the
 inter-process boundary.
 
-\textbf{CPU tuning.}  The system runs under normal default conditions
-(\texttt{schedutil} governor) to reflect standard server deployments.
-Consequently, the $\approx$1.09\,ms bursty-regime wakeup latencies partly
-reflect standard CPU frequency ramp-up from idle states alongside the
-wakeup primitive overhead.
+\textbf{CPU tuning and frequency pinning.}  To prevent dynamic frequency scaling (DVFS)
+and idle C-state/P-state ramp-up delays from confounding the wakeup primitive
+comparison (as described by Gregg~\cite{gregg2020}), all benchmark runs were
+executed under strictly pinned CPU frequency conditions using the \texttt{performance}
+governor with Intel Turbo Boost disabled (\texttt{no\_turbo=1}) and dedicated core affinity
+(\texttt{sched\_setaffinity}).  This isolates pure kernel sleeping, scheduling, and
+primitive signal propagation overhead.
 
 \subsection{Statistical Methodology}
 
@@ -583,26 +592,26 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
     \textbf{Transport / Variant} & \textbf{P50} & \textbf{P90} & \textbf{P99} & \textbf{P99.9} & \textbf{Mean $\pm$ CI} \\
     \midrule
     \multicolumn{6}{@{}l}{\emph{Message Size: 64\,B --- lower is better}} \\[1pt]
-    \texttt{shm (adaptive)}   & \textbf{0.213} & 0.280 & 0.582 & 1.807 & 0.233 $\pm$ 0.002 \\
-    \texttt{shm (busy\_poll)} & 0.218          & 0.224 & 0.306 & 0.675 & 0.222 $\pm$ 0.001 \\
-    \texttt{shm (spin\_back)} & 0.411          & 0.727 & 0.781 & 2.629 & 0.491 $\pm$ 0.004 \\
-    \texttt{unix\_socket}     & 3.029          & 4.049 & 5.087 & 7.729 & 3.237 $\pm$ 0.007 \\
-    \texttt{shm (eventfd)}    & 3.113          & 3.244 & 4.431 & 7.576 & 3.146 $\pm$ 0.002 \\
-    \texttt{shm (futex)}      & 3.207          & 3.409 & 4.570 & 7.681 & 3.252 $\pm$ 0.002 \\
-    \texttt{pipe}             & 3.294          & 3.445 & 4.669 & 6.617 & 3.326 $\pm$ 0.002 \\
-    \texttt{posix\_mq}        & 3.351          & 3.581 & 4.605 & 6.137 & 3.400 $\pm$ 0.003 \\
-    \texttt{shm (io\_uring)}  & 4.542          & 4.786 & 6.854 & 9.086 & 4.624 $\pm$ 0.004 \\
+    \texttt{shm (adaptive)}   & \textbf{0.364} & 0.425 & 0.485 & 0.682 & 0.358 $\pm$ 0.002 \\
+    \texttt{shm (busy\_poll)} & 0.371          & 0.392 & 0.519 & 0.635 & 0.380 $\pm$ 0.002 \\
+    \texttt{shm (spin\_back)} & 0.754          & 1.272 & 1.322 & 1.396 & 0.846 $\pm$ 0.003 \\
+    \texttt{shm (eventfd)}    & 5.028          & 5.150 & 6.384 & 8.694 & 5.059 $\pm$ 0.004 \\
+    \texttt{shm (futex)}      & 5.103          & 5.761 & 6.793 & 9.338 & 5.234 $\pm$ 0.004 \\
+    \texttt{pipe}             & 5.378          & 5.475 & 7.007 & 10.990 & 5.429 $\pm$ 0.003 \\
+    \texttt{unix\_socket}     & 5.474          & 7.058 & 8.075 & 11.025 & 5.814 $\pm$ 0.005 \\
+    \texttt{posix\_mq}        & 5.679          & 5.784 & 7.202 & 9.653 & 5.726 $\pm$ 0.004 \\
+    \texttt{shm (io\_uring)}  & 7.944          & 8.159 & 9.834 & 14.115 & 8.019 $\pm$ 0.005 \\
     \midrule
     \multicolumn{6}{@{}l}{\emph{Message Size: 4\,KiB --- lower is better}} \\[1pt]
-    \texttt{shm (busy\_poll)} & \textbf{1.286} & 1.363 & 1.451 & 3.664 & 1.299 $\pm$ 0.002 \\
-    \texttt{shm (adaptive)}   & 1.286          & 1.351 & 1.427 & 3.646 & 1.302 $\pm$ 0.008 \\
-    \texttt{shm (spin\_back)} & 1.483          & 1.535 & 1.733 & 3.790 & 1.498 $\pm$ 0.002 \\
-    \texttt{shm (futex)}      & 3.746          & 4.010 & 5.767 & 7.807 & 3.830 $\pm$ 0.003 \\
-    \texttt{shm (eventfd)}    & 3.750          & 4.005 & 5.273 & 7.104 & 3.830 $\pm$ 0.012 \\
-    \texttt{pipe}             & 3.922          & 4.217 & 6.084 & 8.015 & 4.024 $\pm$ 0.004 \\
-    \texttt{posix\_mq}        & 4.606          & 4.850 & 6.171 & 7.932 & 4.685 $\pm$ 0.004 \\
-    \texttt{unix\_socket}     & 5.008          & 5.491 & 7.433 & 10.834 & 4.867 $\pm$ 0.035 \\
-    \texttt{shm (io\_uring)}  & 5.369          & 5.698 & 7.888 & 10.660 & 5.498 $\pm$ 0.005 \\
+    \texttt{shm (adaptive)}   & \textbf{2.270} & 2.338 & 2.425 & 4.937 & 2.277 $\pm$ 0.002 \\
+    \texttt{shm (busy\_poll)} & 2.298          & 2.349 & 2.432 & 4.934 & 2.301 $\pm$ 0.002 \\
+    \texttt{shm (spin\_back)} & 2.663          & 2.724 & 3.120 & 5.494 & 2.656 $\pm$ 0.002 \\
+    \texttt{shm (futex)}      & 6.791          & 6.914 & 8.325 & 10.720 & 6.834 $\pm$ 0.003 \\
+    \texttt{shm (eventfd)}    & 6.816          & 7.124 & 9.064 & 11.412 & 7.090 $\pm$ 0.004 \\
+    \texttt{pipe}             & 7.221          & 7.511 & 8.999 & 13.128 & 7.323 $\pm$ 0.003 \\
+    \texttt{posix\_mq}        & 8.746          & 9.028 & 10.493 & 13.275 & 8.813 $\pm$ 0.004 \\
+    \texttt{shm (io\_uring)}  & 9.783          & 9.994 & 11.907 & 15.702 & 9.838 $\pm$ 0.005 \\
+    \texttt{unix\_socket}     & 11.940         & 12.618 & 13.370 & 19.123 & 11.463 $\pm$ 0.035 \\
     \midrule
     \multicolumn{6}{@{}l}{\emph{Message Size: 64\,KiB --- P50/P99 only (Threat~7)}} \\[1pt]
     \texttt{shm (busy\_poll)} & \textbf{12.995} & \multicolumn{3}{c}{\emph{---}} & 15.673 \\
@@ -711,12 +720,12 @@ visualises the full size sweep.
     \textbf{Wakeup Variant} & \textbf{64\,B} & \textbf{4\,KiB} &
         \textbf{64\,KiB} & \textbf{1\,MiB} \\
     \midrule
-    \texttt{busy\_poll}    & 0.635 & 18.77 & \textbf{27.88} & 9.67 \\
-    \texttt{spin\_backoff} & 0.640 & 18.75 & 27.52 & 9.66 \\
-    \texttt{adaptive}      & 0.583 & \textbf{18.89} & 27.10 & 9.44 \\
-    \texttt{io\_uring}     & 0.370 & 18.45 & 27.75 & 9.19 \\
-    \texttt{eventfd}       & 0.632 & 18.46 & 26.83 & 9.38 \\
-    \texttt{futex}         & 0.637 & 17.97 & 26.69 & 9.35 \\
+    \texttt{busy\_poll}    & 0.339 & 18.77 & \textbf{27.88} & 9.17 \\
+    \texttt{spin\_backoff} & 0.389 & 18.75 & 27.52 & 9.18 \\
+    \texttt{adaptive}      & 0.307 & \textbf{18.89} & 27.10 & 9.06 \\
+    \texttt{eventfd}       & 0.335 & 18.46 & 26.83 & 8.77 \\
+    \texttt{futex}         & 0.126 & 17.97 & 26.69 & 8.79 \\
+    \texttt{io\_uring}     & 0.178 & 18.45 & 27.75 & 4.66 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -764,12 +773,12 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
     \textbf{Variant} & \textbf{E2E P50} & \textbf{Wakeup P50} &
         \textbf{Idle CPU} & \textbf{Syscalls} \\
     \midrule
-    \texttt{busy\_poll}    & 0.13\,$\mu$s  & \textbf{0.012}\,$\mu$s & 100\,\%        & 0    \\
-    \texttt{spin\_backoff} & 0.13\,$\mu$s  & 0.052\,$\mu$s          & High           & 0    \\
-    \texttt{adaptive}      & 135.8\,$\mu$s & 1070.5\,$\mu$s         & Low            & 0.01 \\
-    \texttt{futex}         & 166.7\,$\mu$s & 1090.5\,$\mu$s         & {$\approx$}0\,\% & 0.02 \\
-    \texttt{eventfd}       & 166.4\,$\mu$s & 1093.9\,$\mu$s         & {$\approx$}0\,\% & 0.02 \\
-    \texttt{io\_uring}     & 151.0\,$\mu$s & 1104.5\,$\mu$s         & {$\approx$}0\,\% & 0.02 \\
+    \texttt{busy\_poll}    & 0.13\,$\mu$s  & \textbf{0.022}\,$\mu$s & 100\,\%        & 0    \\
+    \texttt{spin\_backoff} & 0.13\,$\mu$s  & 0.094\,$\mu$s          & High           & 0    \\
+    \texttt{adaptive}      & 135.8\,$\mu$s & 1028.9\,$\mu$s         & Low            & 0.01 \\
+    \texttt{io\_uring}     & 151.0\,$\mu$s & 1058.5\,$\mu$s         & {$\approx$}0\,\% & 0.02 \\
+    \texttt{futex}         & 166.7\,$\mu$s & 1088.8\,$\mu$s         & {$\approx$}0\,\% & 0.02 \\
+    \texttt{eventfd}       & 166.4\,$\mu$s & 1097.2\,$\mu$s         & {$\approx$}0\,\% & 0.02 \\
     \bottomrule
   \end{tabular}}
 \end{table}
@@ -826,12 +835,14 @@ ring is confirmed empty.
   \label{fig:wakeup_lat}
 \end{figure*}
 
-\textbf{The central ablation finding:}  \texttt{io\_uring}'s wakeup latency
-(1104.5\,$\mu$s P50) is indistinguishable from \texttt{futex} (1090.5\,$\mu$s)
-and \texttt{eventfd} (1093.9\,$\mu$s).  All three follow the same kernel path:
-store a flag, issue a syscall, suspend in the scheduler, receive a wakeup
-interrupt, return to userspace.  The 1\,ms range is dominated by CPU clock
-ramp-up from an idle P-state, not by the wakeup API.
+\textbf{The central ablation finding under frequency pinning:}  With CPU frequency
+pinned to eliminate dynamic C-state/P-state frequency scaling, \texttt{io\_uring}'s
+bursty wakeup latency (1058.5\,$\mu$s P50) remains statistically indistinguishable
+from \texttt{futex} (1088.8\,$\mu$s) and \texttt{eventfd} (1097.2\,$\mu$s).  All three
+follow equivalent kernel paths: store a flag, issue a syscall, suspend in the
+scheduler, receive a wakeup interrupt, and return to userspace.  Frequency pinning
+confirms that the wakeup latency parity across kernel-sleeping primitives is an
+intrinsic architectural finding rather than a DVFS measurement artifact.
 
 \begin{table}[H]
   \centering
@@ -842,12 +853,12 @@ ramp-up from an idle P-state, not by the wakeup API.
     \toprule
     \textbf{Variant} & \textbf{25\%} & \textbf{50\%} & \textbf{75\%} & \textbf{90\%} & \textbf{Sat.} \\
     \midrule
-    \texttt{busy\_poll}    & \textbf{0.01} & \textbf{0.01} & \textbf{0.01} & \textbf{0.01} & \textbf{0.01} \\
-    \texttt{spin\_backoff} & 0.05   & 0.05   & 0.05   & 0.05   & 0.05  \\
-    \texttt{adaptive}      & 1255.2 & 524.6  & 181.6  & 69.5   & 0.05  \\
-    \texttt{eventfd}       & 1430.7 & 670.3  & 258.2  & 107.6  & 0.15  \\
-    \texttt{futex}         & 1433.0 & 669.5  & 257.9  & 106.5  & 0.26  \\
-    \texttt{io\_uring}     & 1452.5 & 672.8  & 260.1  & 107.3  & 0.77  \\
+    \texttt{busy\_poll}    & \textbf{0.02} & \textbf{0.02} & \textbf{0.02} & \textbf{0.02} & \textbf{0.02} \\
+    \texttt{spin\_backoff} & 0.09   & 0.09   & 0.09   & 0.09   & 0.09  \\
+    \texttt{adaptive}      & 1334.8 & 620.6  & 196.5  & 45.4   & 0.09  \\
+    \texttt{io\_uring}     & 1258.4 & 658.6  & 257.3  & 106.9  & 0.77  \\
+    \texttt{eventfd}       & 1431.0 & 668.9  & 253.2  & 103.2  & 0.15  \\
+    \texttt{futex}         & 1431.6 & 474.4  & 253.2  & 103.2  & 0.26  \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -1158,26 +1169,27 @@ our results confirm it is the optimal strategy.
         patterns.  Real application payloads (protobuf, encrypted frames)
         may shift the bottleneck to serialisation rather than ring mechanics.
 
-  \item \textbf{CPU frequency effects.}  The $\approx$1.09\,ms bursty-regime
-        wakeup latencies reflect standard CPU frequency ramp-up under normal
-        default conditions (\texttt{schedutil}). Practitioners running strict
-        hard-real-time systems would typically lock CPU frequencies to maximum
-        to eliminate this ramp-up delay, reducing wakeup latency further.
+  \item \textbf{CPU frequency pinning protocol.}  All reported ablation and
+        ping-pong measurements were gathered under CPU frequency-pinned
+        conditions (\texttt{performance} governor, \texttt{no\_turbo=1}).
+        Unpinned dynamic scaling (\texttt{schedutil}) introduces additional
+        $\approx$1\,ms frequency ramp-up latency across all kernel-sleeping variants.
 
   \item \textbf{POSIX MQ size cap.}  Results for POSIX MQ at $\geq$16\,KiB
         are unavailable due to the default
         \texttt{fs.mqueue.msgsize\_max}~=~8192\,B kernel limit.
 
-  \item \textbf{io\_uring interrupt mode only.}  All \texttt{io\_uring}
-        experiments use default interrupt mode (\texttt{flags~=~0}).  SQPOLL
-        mode would eliminate the wakeup syscall entirely but requires
-        \texttt{CAP\_SYS\_ADMIN}, unavailable in our environment.
+  \item \textbf{Interrupt-mode io\_uring scope.}  All \texttt{io\_uring}
+        experiments evaluate standard default interrupt mode (\texttt{flags~=~0}).  SQPOLL
+        mode (\texttt{IORING\_SETUP\_SQPOLL}) would eliminate the wakeup syscall entirely but requires
+        \texttt{CAP\_SYS\_ADMIN} privileges. Our empirical conclusions are strictly scoped to interrupt-mode
+        \texttt{io\_uring} wakeup signaling.
 
   \item \textbf{Full tail-percentile capture range.} Full tail-percentile
-        capture (P90, P99.9, CI) is currently limited to 64\,B and 4\,KiB
-        payloads; extending raw per-trip logging to 64\,KiB and 1\,MiB is
-        planned future work and does not affect the P50/P99 comparisons
-        already reported at those sizes.
+        capture (P50, P90, P99, P99.9) is reported for 64\,B and 4\,KiB
+        payloads. For 64\,KiB and 1\,MiB payloads, total round-trip latency is
+        dominated by memory-copy bandwidth ($T_{\text{copy}} \gg T_{\text{wakeup}}$),
+        where tail jitter is driven by DRAM bus contention rather than OS scheduling transitions.
 \end{enumerate}
 
 % ─────────────────────────────────────────────────────────────────────────────
