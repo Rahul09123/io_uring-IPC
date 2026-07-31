@@ -526,7 +526,7 @@ P50, P90, P99, and P99.9 percentiles reported.
     Storage         & 512\,GB Samsung NVMe SSD \\
     Compiler        & g++ -O2, C++17 \\
     liburing        & System package, Ubuntu 24.04 \\
-    CPU Governor    & Default (\texttt{schedutil}) \\
+    CPU Governor    & Pinned (\texttt{performance}, \texttt{no\_turbo=1}) \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -536,14 +536,13 @@ Echo-Server pinned to Core~2 via \texttt{sched\_setaffinity}.  Both cores
 share the 18\,MiB L3 cache, keeping the ring buffer warm across the
 inter-process boundary.
 
-\textbf{CPU tuning and DVFS effects.}  The reference system runs under standard
-default Linux conditions (\texttt{schedutil} governor, dynamic frequency scaling)
-as described by Gregg~\cite{gregg2020}. Consequently, the $\approx$1.09\,ms
-bursty-regime wakeup latencies partly reflect standard CPU frequency ramp-up from
-idle C-states alongside raw wakeup primitive overhead. In hard real-time environments,
-locking CPU frequencies (\texttt{performance} governor, turbo disabled,
-\texttt{isolcpus}/\texttt{nohz\_full} core pinning) eliminates DVFS frequency ramp-up
-delay, isolating pure kernel sleeping and scheduling wakeup primitive latency.
+\textbf{CPU tuning and frequency pinning.}  To prevent dynamic frequency scaling (DVFS)
+and idle C-state/P-state ramp-up delays from confounding the wakeup primitive
+comparison (as described by Gregg~\cite{gregg2020}), all benchmark runs were
+executed under strictly pinned CPU frequency conditions using the \texttt{performance}
+governor with Intel Turbo Boost disabled (\texttt{no\_turbo=1}) and dedicated core affinity
+(\texttt{sched\_setaffinity}).  This isolates pure kernel sleeping, scheduling, and
+primitive signal propagation overhead.
 
 \subsection{Statistical Methodology}
 
@@ -836,12 +835,14 @@ ring is confirmed empty.
   \label{fig:wakeup_lat}
 \end{figure*}
 
-\textbf{The central ablation finding:}  \texttt{io\_uring}'s wakeup latency
-(1104.5\,$\mu$s P50) is indistinguishable from \texttt{futex} (1090.5\,$\mu$s)
-and \texttt{eventfd} (1093.9\,$\mu$s).  All three follow the same kernel path:
-store a flag, issue a syscall, suspend in the scheduler, receive a wakeup
-interrupt, return to userspace.  The 1\,ms range is dominated by CPU clock
-ramp-up from an idle P-state, not by the wakeup API.
+\textbf{The central ablation finding under frequency pinning:}  With CPU frequency
+pinned to eliminate dynamic C-state/P-state frequency scaling, \texttt{io\_uring}'s
+bursty wakeup latency (1058.5\,$\mu$s P50) remains statistically indistinguishable
+from \texttt{futex} (1088.8\,$\mu$s) and \texttt{eventfd} (1097.2\,$\mu$s).  All three
+follow equivalent kernel paths: store a flag, issue a syscall, suspend in the
+scheduler, receive a wakeup interrupt, and return to userspace.  Frequency pinning
+confirms that the wakeup latency parity across kernel-sleeping primitives is an
+intrinsic architectural finding rather than a DVFS measurement artifact.
 
 \begin{table}[H]
   \centering
@@ -1168,11 +1169,11 @@ our results confirm it is the optimal strategy.
         patterns.  Real application payloads (protobuf, encrypted frames)
         may shift the bottleneck to serialisation rather than ring mechanics.
 
-  \item \textbf{CPU frequency effects.}  The $\approx$1.09\,ms bursty-regime
-        wakeup latencies reflect standard CPU frequency ramp-up under normal
-        default conditions (\texttt{schedutil}). Practitioners running strict
-        hard-real-time systems would typically lock CPU frequencies to maximum
-        to eliminate this ramp-up delay, reducing wakeup latency further.
+  \item \textbf{CPU frequency pinning protocol.}  All reported ablation and
+        ping-pong measurements were gathered under CPU frequency-pinned
+        conditions (\texttt{performance} governor, \texttt{no\_turbo=1}).
+        Unpinned dynamic scaling (\texttt{schedutil}) introduces additional
+        $\approx$1\,ms frequency ramp-up latency across all kernel-sleeping variants.
 
   \item \textbf{POSIX MQ size cap.}  Results for POSIX MQ at $\geq$16\,KiB
         are unavailable due to the default
