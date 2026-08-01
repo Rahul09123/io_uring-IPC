@@ -243,7 +243,8 @@ dimensions on identical hardware with a controlled ablation.
 
 \subsection{Traditional Kernel-Mediated IPC}
 
-\textbf{POSIX Pipes (FIFOs)} (Stevens and Rago~\cite{stevens2013}) provide uni-directional byte streams backed by a
+\textbf{POSIX Pipes (FIFOs)} (Stevens and Rago~\cite{stevens2013}; Linux
+man-pages~\cite{linux-man}) provide uni-directional byte streams backed by a
 kernel circular buffer (default 64\,KiB, tunable to 1\,MiB via
 \texttt{fcntl(F\_SETPIPE\_SZ)}).  Every \texttt{write} copies data from user
 to kernel space; every \texttt{read} copies it back.  The producer and consumer
@@ -252,7 +253,7 @@ drains, incurring scheduler-wakeup latency on each transition.  At very small
 messages (64\,B), the pipe's fixed per-syscall entry cost dominates; at large
 messages ($\geq$256\,KiB), finite pipe capacity creates producer backpressure.
 
-\textbf{UNIX Domain Sockets} bypass the network stack but retain the socket
+\textbf{UNIX Domain Sockets}~\cite{linux-man} bypass the network stack but retain the socket
 buffer abstraction (\texttt{sk\_buff}).  Each \texttt{sendmsg}/\texttt{recvmsg}
 pair requires a system call and a socket-layer serialisation lock
 (\texttt{mutex\_lock} visible in flamegraph traces).  Socket send/receive
@@ -262,7 +263,7 @@ competitive throughput at large payload sizes in the recorded runs.  The
 experiment does not isolate which socket-buffer or flow-control behavior
 produces that result.
 
-\textbf{POSIX Message Queues (\texttt{mqueue})} deliver structured,
+\textbf{POSIX Message Queues (\texttt{mqueue})}~\cite{linux-man} deliver structured,
 priority-sorted messages via a virtual filesystem inode under
 \texttt{/dev/mqueue}.  A key optimisation---\texttt{pipelined\_send}---delivers
 directly into a blocked receiver's address space when one is already waiting,
@@ -1012,12 +1013,12 @@ change recovers throughput at 1\,MiB; this is left as future work.
 
 \subsection{Comparison with Related Measurement Studies}
 
-Our findings agree with Didona et~al.~\cite{didona2022} that \texttt{io\_uring}
-provides no inherent advantage for unbatched single-operation IPC when compared
-to simpler synchronous primitives. Similarly, in our depth-1 IPC ping-pong
-benchmark (Suite 2), per-message submission overhead makes \texttt{io\_uring} slightly
-slower than \texttt{futex}, matching its latency only when wakeups are amortized
-across bursty arrivals (Suite 1).
+Didona et~al.~\cite{didona2022} compare \texttt{libaio}, SPDK, and
+\texttt{io\_uring} for storage I/O, showing that the relative cost of an I/O
+API depends on workload and execution model. Their study does not evaluate
+IPC; independently, our depth-1 IPC ping-pong benchmark (Suite~2) finds that
+per-message submission overhead makes \texttt{io\_uring} slightly slower than
+\texttt{futex}, with wakeups amortized only across bursty arrivals (Suite~1).
 In contrast to Ren and Trivedi~\cite{ren2023}, who attribute speedups to
 \texttt{io\_uring}'s reduced per-operation overhead for NVMe I/O, our
 experiment shows this benefit does not transfer to shared-memory IPC wakeup:
@@ -1026,13 +1027,13 @@ SPSC wakeup is inherently one-at-a-time (one signal per empty-ring event).
 Batching is only applicable when multiple channels empty simultaneously, which
 requires a multi-ring architecture outside the scope of this study.
 
-Practitioner implementations such as Aeron~\cite{disruptor} use a dedicated
-``media driver'' thread that busy-spins on all channels, effectively
-implementing \texttt{busy\_poll} at the framework level.  Our data support
-this design choice: \texttt{busy\_poll} achieves 0.022\,$\mu$s wakeup latency
-vs.\ 1092--1095\,$\mu$s for the interrupt-mode sleeping variants. The trade-off is
-one dedicated core per media driver; for applications that can afford this,
-it provides the lowest measured wakeup latency on this platform.
+Aeron's media driver supports dedicated sender, receiver, and conductor
+threads with configurable idle strategies~\cite{aeron-media-driver}. A
+busy-spin configuration makes a trade-off operationally similar to
+\texttt{busy\_poll}: our data show 0.022\,$\mu$s wakeup latency versus
+1092--1095\,$\mu$s for the interrupt-mode sleeping variants, at the cost of a
+dedicated CPU resource. This comparison concerns the busy-spin trade-off; it
+does not claim that every Aeron deployment uses the same strategy.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Threats to Validity}
@@ -1191,6 +1192,11 @@ Linux man-pages project,
 \texttt{mq\_overview(7)}, \texttt{pipe(7)}, \texttt{unix(7)},
 kernel.org, 2024.
 Available: \url{https://man7.org/linux/man-pages/}
+
+\bibitem{aeron-media-driver}
+Aeron Project,
+``Media Driver,'' Aeron Documentation, accessed Aug.\ 2026.
+Available: \url{https://aeron.io/docs/aeron/media-driver/}
 
 \end{thebibliography}
 
