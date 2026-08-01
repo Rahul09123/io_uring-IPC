@@ -26,6 +26,7 @@
 #include "stats_util.h"
 
 #include <atomic>
+#include <cerrno>
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
@@ -41,14 +42,19 @@
 static bool g_sqpoll = false;
 
 static int init_uring(struct io_uring* ring) {
-    if (!g_sqpoll)
-        return io_uring_queue_init(64, ring, 0);
-
-    struct io_uring_params params {};
-    params.flags = IORING_SETUP_SQPOLL;
-    // Keep the kernel SQ polling thread alive across the depth-1 exchanges.
-    params.sq_thread_idle = 2000;
-    return io_uring_queue_init_params(64, ring, &params);
+    int rc = 0;
+    if (!g_sqpoll) {
+        rc = io_uring_queue_init(64, ring, 0);
+    } else {
+        struct io_uring_params params {};
+        params.flags = IORING_SETUP_SQPOLL;
+        // Keep the kernel SQ polling thread alive across the depth-1 exchanges.
+        params.sq_thread_idle = 2000;
+        rc = io_uring_queue_init_params(64, ring, &params);
+    }
+    if (rc < 0)
+        errno = -rc;
+    return rc;
 }
 
 // ── Channel layout ────────────────────────────────────────────────────────────
