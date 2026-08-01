@@ -19,10 +19,12 @@ Using one clock avoids cross-core timestamp subtraction. CPU affinity reduces sc
 - `pp_pipe.cpp`: pair of POSIX pipes
 - `pp_socket.cpp`: UNIX domain socket
 - `pp_mq.cpp`: pair of POSIX message queues
-- `pp_shm_uring.cpp`: shared memory with interrupt-mode `io_uring` FIFO wakeups
+- `pp_shm_uring.cpp`: shared memory with interrupt-mode or SQPOLL `io_uring` FIFO wakeups
 - `pp_ablation.cpp`: shared-memory ring across busy poll, spin backoff, adaptive, futex, eventfd, and interrupt-mode `io_uring`
 
-SQPOLL is evaluated by the throughput/wakeup ablation as a separately labelled configuration; this depth-1 runner does not add SQPOLL to the primary six-variant ping-pong table.
+SQPOLL is evaluated by the throughput/wakeup ablation and can also be run as a
+separate depth-1 `shm_io_uring` configuration.  It is never mixed into the
+primary six-variant ablation table; its summary is written separately.
 
 ## Payloads and measured rounds
 
@@ -61,6 +63,7 @@ Run a subset:
 bash run_pingpong.sh --ipc pipe --ipc unix_socket
 bash run_pingpong.sh --ipc posix_mq
 bash run_pingpong.sh --ipc shm_ablation --variant futex --variant io_uring
+bash run_pingpong.sh --require-fixed-frequency --ipc shm_io_uring --sqpoll
 ```
 
 Accepted IPC names are `pipe`, `unix_socket`, `shm_io_uring`, `posix_mq`, and `shm_ablation`.
@@ -69,6 +72,7 @@ Accepted IPC names are `pipe`, `unix_socket`, `shm_io_uring`, `posix_mq`, and `s
 
 - `data/pingpong_<ipc>_summary.csv`
 - `data/pingpong_ablation_<variant>_summary.csv`
+- `data/pingpong_shm_uring_sqpoll_summary.csv`
 - `data/pingpong_results.csv`
 - `data/environment_pingpong.txt`
 - `figures/pingpong/fig_A_unloaded_latency.png`

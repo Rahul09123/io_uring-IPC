@@ -5,6 +5,7 @@
 #   bash run_pingpong.sh                        # full sweep
 #   bash run_pingpong.sh --dry-run              # compile only
 #   bash run_pingpong.sh --require-fixed-frequency
+#   bash run_pingpong.sh --ipc shm_io_uring --sqpoll
 #   bash run_pingpong.sh --ipc pipe             # single IPC type
 #   bash run_pingpong.sh --ipc shm_ablation \
 #                        --variant futex \
@@ -38,12 +39,14 @@ SELECTED_IPCS=()
 SELECTED_VARIANTS=()
 DRY_RUN=0
 REQUIRE_FIXED_FREQUENCY=0
+SQPOLL=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run)  DRY_RUN=1;               shift;;
         --require-fixed-frequency) REQUIRE_FIXED_FREQUENCY=1; shift;;
+        --sqpoll)   SQPOLL=1;                shift;;
         --ipc)      SELECTED_IPCS+=("$2");   shift 2;;
         --variant)  SELECTED_VARIANTS+=("$2"); shift 2;;
         *) echo "Unknown option: $1"; exit 1;;
@@ -52,6 +55,13 @@ done
 
 if [[ ${#SELECTED_IPCS[@]} -eq 0 ]];     then SELECTED_IPCS=("${ALL_IPCS[@]}"); fi
 if [[ ${#SELECTED_VARIANTS[@]} -eq 0 ]]; then SELECTED_VARIANTS=("${VARIANT_NAMES[@]}"); fi
+
+if [[ $SQPOLL -eq 1 ]]; then
+    if [[ ${#SELECTED_IPCS[@]} -ne 1 || "${SELECTED_IPCS[0]}" != "shm_io_uring" ]]; then
+        echo "ERROR: --sqpoll requires exactly: --ipc shm_io_uring" >&2
+        exit 2
+    fi
+fi
 
 # ── Step 0: Warn if CPU governor is not 'performance' ────────────────────────
 echo "================================================"
@@ -124,7 +134,12 @@ for ipc in "${SELECTED_IPCS[@]}"; do
             ;;
         shm_io_uring)
             echo ""; echo "── SHM + io_uring ───────────────────────────────"
-            "$BUILD_DIR/pp_shm_uring"
+            if [[ $SQPOLL -eq 1 ]]; then
+                echo "  mode: SQPOLL"
+                "$BUILD_DIR/pp_shm_uring" --sqpoll
+            else
+                "$BUILD_DIR/pp_shm_uring"
+            fi
             ;;
         posix_mq)
             echo ""; echo "── POSIX MQ ─────────────────────────────────────"

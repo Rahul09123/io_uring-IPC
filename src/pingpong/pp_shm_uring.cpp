@@ -36,6 +36,20 @@
 #include <unistd.h>
 #include <vector>
 #include <cstring>
+#include <string>
+
+static bool g_sqpoll = false;
+
+static int init_uring(struct io_uring* ring) {
+    if (!g_sqpoll)
+        return io_uring_queue_init(64, ring, 0);
+
+    struct io_uring_params params {};
+    params.flags = IORING_SETUP_SQPOLL;
+    // Keep the kernel SQ polling thread alive across the depth-1 exchanges.
+    params.sq_thread_idle = 2000;
+    return io_uring_queue_init_params(64, ring, &params);
+}
 
 // ── Channel layout ────────────────────────────────────────────────────────────
 struct alignas(64) PPChannel {
@@ -119,9 +133,9 @@ static void echo_server(PPShm* shm, int fifo_fwd_fd, int fifo_bwd_fd,
                           size_t msg_sz, size_t n_rounds) {
     pp_set_affinity(PP_ECHO_CORE);
 
-    struct io_uring ring_rd{}, ring_wr{};
-    io_uring_queue_init(64, &ring_rd, 0);
-    io_uring_queue_init(64, &ring_wr, 0);
+   struct io_uring ring_rd{}, ring_wr{};
+    if (init_uring(&ring_rd) < 0 || init_uring(&ring_wr) < 0)
+        _exit(2);
 
     std::vector<char> buf(msg_sz);
     size_t total = PP_WARMUP + n_rounds;
@@ -145,9 +159,9 @@ static PPStats run_initiator(PPShm* shm, int fifo_fwd_fd, int fifo_bwd_fd,
     std::vector<uint64_t> rtts;
     rtts.reserve(n_rounds);
 
-    struct io_uring ring_wr{}, ring_rd{};
-    io_uring_queue_init(64, &ring_wr, 0);
-    io_uring_queue_init(64, &ring_rd, 0);
+   struct io_uring ring_wr{}, ring_rd{};
+    if (init_uring(&ring_wr) < 0 || init_uring(&ring_rd) < 0)
+        return {};
 
     size_t total = PP_WARMUP + n_rounds;
 
@@ -172,15 +186,26 @@ static PPStats run_initiator(PPShm* shm, int fifo_fwd_fd, int fifo_bwd_fd,
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-int main() {
-    system("mkdir -p data");
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--sqpoll") {
+        g_sqpoll = true;
+    } else if (argc != 1) {
+        std::cerr << "Usage: " << argv[0] << " [--sqpoll]\\n";
+        return 2;
+    }
 
-    std::ofstream summary("data/pingpong_shm_uring_summary.csv");
-    summary << PP_SUMMARY_CSV_HEADER;
+   system("mkdir -p data");
 
-    std::cout << "[pp_shm_uring] Starting depth-1 SHM+io_uring ping-pong benchmark\n";
-    std::cout << "  Mode: CLOCK_MONOTONIC_RAW, single clock source (Core "
-              << PP_INITIATOR_CORE << ")\n\n";
+    const char* summary_path = g_sqpoll
+        ? "data/pingpong_shm_uring_sqpoll_summary.csv"
+        : "data/pingpong_shm_uring_summary.csv";
+    std::ofstream summary(summary_path);
+   summary << PP_SUMMARY_CSV_HEADER;
+
+   std::cout << "[pp_shm_uring] Starting depth-1 SHM+io_uring ping-pong benchmark\n";
+   std::cout << "  Mode: CLOCK_MONOTONIC_RAW, single clock source (Core "
+              << PP_INITIATOR_CORE << ")"
+              << (g_sqpoll ? ", SQPOLL\n\n" : ", interrupt mode\n\n");
 
     // Create FIFOs (two: one per direction)
     unlink(PP_FIFO_FWD); unlink(PP_FIFO_BWD);
@@ -228,9 +253,11 @@ int main() {
             // After fork, child inherits parent's mmap — no re-mapping needed
             pp_set_affinity(PP_ECHO_CORE);
 
-            struct io_uring ring_rd{}, ring_wr{};
-            io_uring_queue_init(64, &ring_rd, 0);
-            io_uring_queue_init(64, &ring_wr, 0);
+           struct io_uring ring_rd{}, ring_wr{};
+            if (init_uring(&ring_rd) < 0 || init_uring(&ring_wr) < 0) {
+                std::perror("io_uring_queue_init");
+                _exit(2);
+            }
             std::vector<char> buf(sz);
             size_t total = PP_WARMUP + n_rounds;
             for (size_t i = 0; i < total; ++i) {
@@ -245,9 +272,12 @@ int main() {
         // Parent: initiator on Core A
         pp_set_affinity(PP_INITIATOR_CORE);
 
-        struct io_uring ring_wr{}, ring_rd{};
-        io_uring_queue_init(64, &ring_wr, 0);
-        io_uring_queue_init(64, &ring_rd, 0);
+       struct io_uring ring_wr{}, ring_rd{};
+        if (init_uring(&ring_wr) < 0 || init_uring(&ring_rd) < 0) {
+            std::perror("io_uring_queue_init");
+            waitpid(child, nullptr, WNOHANG);
+            return 2;
+        }
 
         std::vector<char>     payload(sz, 0xEF);
         std::vector<uint64_t> rtts;
@@ -279,11 +309,13 @@ int main() {
                   << " µs  p99=" << s.p99_us
                   << " µs  p99.9=" << s.p999_us << " µs\n";
 
-        write_summary_row(summary, "shm_io_uring", "io_uring", sz, s);
+        write_summary_row(summary,
+                          g_sqpoll ? "shm_io_uring_sqpoll" : "shm_io_uring",
+                          g_sqpoll ? "io_uring_sqpoll" : "io_uring", sz, s);
     }
 
     unlink(PP_FIFO_FWD); unlink(PP_FIFO_BWD);
     summary.close();
-    std::cout << "\n[pp_shm_uring] Done. Summary -> data/pingpong_shm_uring_summary.csv\n";
+    std::cout << "\n[pp_shm_uring] Done. Summary -> " << summary_path << "\n";
     return 0;
 }
