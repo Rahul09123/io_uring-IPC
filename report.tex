@@ -377,7 +377,7 @@ struct alignas(64) RingBuffer {
 Three design properties are critical.
 
 \textbf{(1) Cache-line isolation.}  \texttt{head}, \texttt{tail}, and
-\texttt{consumer\-\_sleeping} each occupy their own 64-byte cache line.
+the sleeping control flag each occupy their own 64-byte cache line.
 Without this separation, a producer write to \texttt{head} invalidates
 the cache line containing \texttt{tail} on the consumer core, forcing
 an RFO (Request For Ownership) round-trip on every slot transition.  Our
@@ -388,7 +388,7 @@ favourably to 30--34\,\% for the measured pipe and socket baselines.
 \textbf{(2) Sequential consistency at publish boundaries.}
 \texttt{head} is stored with \texttt{memory\-\_order\-\_seq\-\_cst}
 to prevent Store-Load reordering that could cause the producer to read
-stale \texttt{consumer\-\_sleeping~=~0} and skip sending a wakeup,
+stale cleared sleeping flag and skip sending a wakeup,
 silently deadlocking the consumer.  On x86 (TSO), this is equivalent to
 a plain store followed by a \texttt{mfence}; on ARM64 it compiles to a
 \texttt{stlr} (store-release) instruction.
@@ -396,11 +396,10 @@ a plain store followed by a \texttt{mfence}; on ARM64 it compiles to a
 \textbf{(3) Lost-wakeup prevention.}  A classic race exists in any
 producer-consumer pair: the consumer checks \texttt{head == tail}
 (empty), decides to sleep, but before setting
-\texttt{consumer\-\_sleeping}, the producer writes a slot and checks
-\texttt{consumer\-\_sleeping~=~0} (decides not to signal), then the
-consumer sets \texttt{consumer\-\_sleeping~=~1} and waits---forever.
+the sleeping flag, the producer writes a slot and finds the flag clear
+(decides not to signal), then the consumer sets it and waits---forever.
 We eliminate this race by having the consumer set
-\texttt{consumer\-\_sleeping~=~1} \emph{first}, then re-check
+the sleeping flag \emph{first}, then re-check
 \texttt{head~!=~tail} under a full memory fence.  If a slot arrived in
 the window, the re-check catches it and the consumer proceeds without
 sleeping.
@@ -444,7 +443,7 @@ ring is rarely empty (spin wins) while gracefully handling burst-idle traffic
 (futex sleep saves power).
 
 \paragraph{4.~\texttt{futex}.}
-The consumer stores~1 to \texttt{consumer\-\_sleeping} and calls
+The consumer sets the sleeping flag to~1 and calls
 \texttt{SYS\-\_futex(FUTEX\-\_WAIT)}.  The kernel checks the address
 atomically; if it still reads~1, the thread is suspended.  The producer
 stores~0 and calls \texttt{FUTEX\-\_WAKE}.  One system call per sleep
@@ -512,7 +511,7 @@ Both $t_{\text{start}}$ and $t_{\text{end}}$ are recorded on
 \textbf{Initiator Core~1} using
 \texttt{clock\_gettime(CLOCK\_MONOTONIC\_RAW)}.  Single-trip latency:
 \[
-  L_{\text{trip}} = \frac{t_{\text{end}} - t_{\text{start}}}{2} \quad [\mu\text{s}]
+  L_{\mathrm{trip}} = \frac{t_{\mathrm{end}} - t_{\mathrm{start}}}{2}\;[\mu\mathrm{s}]
 \]
 The suite discards 10\,000 warmup trips and uses size-scaled measured samples:
 100\,000 rounds through 1\,KiB, 50\,000 at 4\,KiB, 20\,000 at 16\,KiB,
@@ -597,11 +596,11 @@ $\bar{L} \pm 1.96\sigma_L/\sqrt{M}$, matching the published analysis code.
 
 \subsection{Unloaded Ping-Pong Latency (Suite 2)}
 
-Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P99, P99.9, and mean $\pm$ 95\% CI) at all four message sizes. Values are drawn consistently from the root \texttt{data/pingpong\_*\_summary.csv} files; legacy duplicates and the conflicting aggregate file are not used.
+Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P99, P99.9, and mean $\pm$ 95\% CI) at 64\,B (100\,000 rounds), 4\,KiB (50\,000 rounds), 64\,KiB (10\,000 rounds), and 1\,MiB (2\,000 rounds). Values are drawn consistently from the root \texttt{data/pingpong\_*\_summary.csv} files; legacy duplicates and the conflicting aggregate file are not used.
 
 \begin{table}[!t]
   \centering
-  \caption{Single-Trip Ping-Pong Latency Distributions ($\mu$s). Each row reports P50, P90, P99, P99.9, and mean $\pm$ 95\% CI from the canonical root summary CSVs.}
+  \caption{Single-Trip Ping-Pong Latency Distributions ($\mu$s). Sample counts are 100\,000 (64\,B), 50\,000 (4\,KiB), 10\,000 (64\,KiB), and 2\,000 (1\,MiB). Each row reports P50, P90, P99, P99.9, and mean $\pm$ 95\% CI from the canonical root summary CSVs.}
   \label{tab:pingpong}
   \resizebox{\columnwidth}{!}{%
   \small
@@ -832,11 +831,10 @@ attribute the disparity to an intrinsic SQPOLL wakeup advantage.
 
 As shown in Table~\ref{tab:offeredload},
 under offered-load sweeps (25\%, 50\%, 75\%, 90\% of saturated capacity), spinning mechanisms
-(\texttt{busy\discretionary{\mbox{\texttt{\_}}}{}{}poll} and
-\texttt{spin\discretionary{\mbox{\texttt{\_}}}{}{}backoff}) maintain
+(\mbox{\texttt{busy\_poll}} and \mbox{\texttt{spin\_backoff}}) maintain
 fixed sub-microsecond latencies regardless of offered load.  For
 kernel-sleeping variants
-(\texttt{futex}, \texttt{eventfd}, \texttt{io\discretionary{\mbox{\texttt{\_}}}{}{}uring}),
+(\texttt{futex}, \texttt{eventfd}, \mbox{\texttt{io\_uring}}),
 median latency dynamically scales down as load
 increases---dropping from $\approx$1374--1441\,$\mu$s at 25\% load
 down to $\approx$103\,$\mu$s at 90\% load as the shorter inter-arrival gaps
