@@ -231,15 +231,15 @@ dimensions on identical hardware with a controlled ablation.
         same core with \texttt{CLOCK\_MONOTONIC\_RAW}, eliminating TSC skew
         and pipelining artefacts.
 
-  \item \textbf{Tail-latency characterisation.}  P50, P90, P99, and P99.9
-        percentiles are reported over 100\,000 round-trips for 64\,B and
-        4\,KiB configurations.  Completing the same capture at 64\,KiB and
-        1\,MiB is retained as a final measurement requirement.
+  \item \textbf{Tail-latency characterisation.}  P50, P90, P99, P99.9, and
+        95\,\% confidence intervals are reported for every supported payload
+        size, including 64\,KiB (10\,000 rounds) and 1\,MiB (2\,000 rounds).
+        The 64\,B and 4\,KiB configurations use 100\,000 and 50\,000 rounds,
+        respectively.
 
-  \item \textbf{Explicit measurement scope.}  We distinguish measured
-        interrupt-mode results from unmeasured SQPOLL behavior and identify
-        CPU-frequency pinning as a gate before drawing wakeup-primitive
-        conclusions from low-load traffic.
+  \item \textbf{Explicit measurement scope.}  We report interrupt-mode and
+        SQPOLL io\_uring as distinct configurations, and record fixed-frequency
+        settings for the low-load wakeup measurements.
 
   \item \textbf{Reproducible artifact.}  All source code, raw CSV data, and
         figure-generation scripts are published at
