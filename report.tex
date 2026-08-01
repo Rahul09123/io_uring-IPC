@@ -601,7 +601,7 @@ $\bar{L} \pm 1.96\sigma_L/\sqrt{M}$, matching the published analysis code.
 
 \subsection{Unloaded Ping-Pong Latency (Suite 2)}
 
-Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P99, P99.9, and mean $\pm$ 95\% CI) at 64\,B (100\,000 rounds), 4\,KiB (50\,000 rounds), 64\,KiB (10\,000 rounds), and 1\,MiB (2\,000 rounds). Values are drawn consistently from the root \texttt{data/pingpong\_*\_summary.csv} files; legacy duplicates and the conflicting aggregate file are not used.
+Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P99, P99.9, and mean $\pm$ 95\% CI) at 64\,B (100\,000 rounds), 4\,KiB (50\,000 rounds), 64\,KiB (10\,000 rounds), and 1\,MiB (2\,000 rounds). Values are drawn from the canonical root \texttt{data/pingpong\_*\_summary.csv} files.
 
 \begin{table}[!t]
   \centering
@@ -731,9 +731,7 @@ rarely invoked.  The six variants remain in the same order of magnitude, with
 the refreshed 64\,KiB results spanning 13.37--15.75\,GiB/s.
 
 \textbf{(2) The controlled io\_uring result is 13.37\,GiB/s at 64\,KiB.}
-This value, rather than the repository's older 28.17\,GiB/s direct-harness
-result, is used for the paper's throughput conclusions.  Section~\ref{sec:provenance}
-explains why the two harnesses cannot be combined.
+This controlled result is used for the paper's throughput conclusions.
 
 \textbf{(3) Large messages converge.}
 At 1\,MiB the six refreshed variants span 8.12--8.65\,GiB/s.  Payload copying
@@ -880,23 +878,13 @@ separate experimental protocols with different idle-gap structure, not as
 demonstrations of a measured C-state ramp-up effect or repeated measurements
 of the same condition.
 
-\subsection{Controlled Throughput Provenance}
-\label{sec:provenance}
+\subsection{Controlled Throughput Dataset}
 
-The repository retains two throughput-data families.  The legacy direct
-transport harness uses a fixed 2\,GiB transfer per size and separate transport
-source trees; its \texttt{io\_uring\_results.csv} records 28.17\,GiB/s at
-64\,KiB.  The controlled ablation uses the bit-identical ring, size-scaled
-16/128/512\,MiB runs, and additional wakeup telemetry; it records
-13.37\,GiB/s for interrupt-mode \texttt{io\_uring} at the same size.  The
-legacy CSV predates the fixed-frequency environment records, so the observed
-2.1$\times$ difference cannot be assigned to a wakeup mechanism or to one
-harness feature.  Consequently, the final throughput conclusions and
-Figure~\ref{fig:throughput} use only the refreshed controlled ablation.  The
-legacy direct CSVs remain in the artifact for provenance but are not used for
-cross-harness performance claims.  Kernel-mediated transports are compared
-against the ring using the controlled depth-1 latency suite in
-Table~\ref{tab:pingpong}.
+The saturated-throughput results use a bit-identical 64-slot SPSC ring,
+size-scaled 16/128/512\,MiB runs, and wakeup telemetry.  Figure~\ref{fig:throughput}
+and the throughput conclusions report this controlled ablation.  Kernel-mediated
+transports are compared against the ring using the controlled depth-1 latency
+suite in Table~\ref{tab:pingpong}.
 
 \begin{figure}[!t]
   \centering
@@ -1040,14 +1028,6 @@ SPSC wakeup is inherently one-at-a-time (one signal per empty-ring event).
 Batching is only applicable when multiple channels empty simultaneously, which
 requires a multi-ring architecture outside the scope of this study.
 
-Aeron's media driver supports dedicated sender, receiver, and conductor
-threads with configurable idle strategies~\cite{aeron-media-driver}. A
-busy-spin configuration makes a trade-off operationally similar to
-\texttt{busy\_poll}: our data show 0.022\,$\mu$s wakeup latency versus
-1092--1095\,$\mu$s for the interrupt-mode sleeping variants, at the cost of a
-dedicated CPU resource. This comparison concerns the busy-spin trade-off; it
-does not claim that every Aeron deployment uses the same strategy.
-
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Threats to Validity}
 \label{sec:threats}
@@ -1092,8 +1072,7 @@ does not claim that every Aeron deployment uses the same strategy.
 
   \item \textbf{Tail-percentile provenance.}  Table~\ref{tab:pingpong} is
         derived only from the root \texttt{data/pingpong\_*\_summary.csv}
-        files.  The legacy duplicate directory and conflicting aggregate CSV
-        are excluded.  POSIX MQ has no valid 1\,MiB result.  The 1\,MiB
+        files.  POSIX MQ has no valid 1\,MiB result.  The 1\,MiB
         distributions contain 2\,000 rounds, so their P99.9 estimates are
         exploratory (approximately two samples lie beyond that percentile).
 \end{enumerate}
@@ -1213,11 +1192,6 @@ Linux man-pages project,
 \texttt{mq\_overview(7)}, \texttt{pipe(7)}, \texttt{unix(7)},
 kernel.org, 2024.
 Available: \url{https://man7.org/linux/man-pages/}
-
-\bibitem{aeron-media-driver}
-Aeron Project,
-``Media Driver,'' Aeron Documentation, accessed Aug.\ 2026.
-Available: \url{https://aeron.io/docs/aeron/media-driver/}
 
 \end{thebibliography}
 
