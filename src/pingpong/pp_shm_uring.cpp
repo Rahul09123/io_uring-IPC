@@ -42,9 +42,9 @@
 
 static bool g_sqpoll = false;
 
-static int init_uring(struct io_uring* ring) {
-    int rc = 0;
-    if (!g_sqpoll) {
+static int init_uring(struct io_uring* ring, bool sqpoll) {
+   int rc = 0;
+    if (!sqpoll) {
         rc = io_uring_queue_init(64, ring, 0);
     } else {
         struct io_uring_params params {};
@@ -141,8 +141,8 @@ static void echo_server(PPShm* shm, int fifo_fwd_fd, int fifo_bwd_fd,
     pp_set_affinity(PP_ECHO_CORE);
 
    struct io_uring ring_rd{}, ring_wr{};
-    if (init_uring(&ring_rd) < 0 || init_uring(&ring_wr) < 0)
-        _exit(2);
+    if (init_uring(&ring_rd, false) < 0 || init_uring(&ring_wr, g_sqpoll) < 0)
+       _exit(2);
 
     std::vector<char> buf(msg_sz);
     size_t total = PP_WARMUP + n_rounds;
@@ -167,8 +167,8 @@ static PPStats run_initiator(PPShm* shm, int fifo_fwd_fd, int fifo_bwd_fd,
     rtts.reserve(n_rounds);
 
    struct io_uring ring_wr{}, ring_rd{};
-    if (init_uring(&ring_wr) < 0 || init_uring(&ring_rd) < 0)
-        return {};
+    if (init_uring(&ring_wr, g_sqpoll) < 0 || init_uring(&ring_rd, false) < 0)
+       return {};
 
     size_t total = PP_WARMUP + n_rounds;
 
@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
             pp_set_affinity(PP_ECHO_CORE);
 
            struct io_uring ring_rd{}, ring_wr{};
-           if (init_uring(&ring_rd) < 0 || init_uring(&ring_wr) < 0) {
+            if (init_uring(&ring_rd, false) < 0 || init_uring(&ring_wr, g_sqpoll) < 0) {
                std::perror("io_uring_queue_init");
                 const char status = 'E';
                 (void)write(startup_pipe[1], &status, 1);
@@ -298,7 +298,7 @@ int main(int argc, char** argv) {
        pp_set_affinity(PP_INITIATOR_CORE);
 
        struct io_uring ring_wr{}, ring_rd{};
-       if (init_uring(&ring_wr) < 0 || init_uring(&ring_rd) < 0) {
+        if (init_uring(&ring_wr, g_sqpoll) < 0 || init_uring(&ring_rd, false) < 0) {
            std::perror("io_uring_queue_init");
             close(startup_pipe[0]);
             kill(child, SIGTERM);
