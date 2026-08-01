@@ -306,9 +306,11 @@ performs an \emph{acquire load} of the same variable.  For an SPSC ring, this
 means the consumer observing \texttt{head~>~tail} is guaranteed to see the
 complete payload written by the producer before \texttt{head} was advanced.
 Using \texttt{memory\_order\_relaxed} on \texttt{head} (a common optimisation)
-works on x86 due to Total Store Order (TSO) but is technically undefined
-behaviour on weakly-ordered architectures (ARM, RISC-V, Power) that permit
-Store-Load reordering.  We use \texttt{memory\_order\_seq\_cst} on the
+may appear to work on x86 due to Total Store Order (TSO), but does not provide
+the release/acquire ordering required by this algorithm on weakly ordered
+architectures (ARM, RISC-V, Power).  The resulting stale-payload or
+lost-wakeup logic error is possible where Store-Load reordering is permitted.
+We use \texttt{memory\_order\_seq\_cst} on the
 publish store to maintain portability and prevent the lost-wakeup race.
 
 \textbf{False sharing}---where producer and consumer cache lines collide---is
@@ -441,7 +443,7 @@ package power directly.
 The consumer spins for up to 500 iterations; if no data arrives, it falls back
 to a \texttt{futex} sleep.  This hybrid targets low-latency workloads where the
 ring is rarely empty (spin wins) while gracefully handling burst-idle traffic
-(futex sleep saves power).
+(the blocking phase reduces busy-wait CPU time; power was not measured).
 
 \paragraph{4.~\texttt{futex}.}
 The consumer sets the sleeping flag to~1 and calls
@@ -551,7 +553,9 @@ P99, P99.9, and a 95\,\% confidence interval are reported.
 \textbf{Core affinity.}  Producer/Initiator pinned to Core~1; Consumer/
 Echo-Server pinned to Core~2 via \texttt{sched\_setaffinity}.  Both cores
 share the 18\,MiB L3 cache, keeping the ring buffer warm across the
-inter-process boundary.
+inter-process boundary.  The environment records the logical CPU IDs but not
+their P-core/E-core classification; results therefore apply only to this pinned
+pair on the hybrid Alder Lake host.
 
 \textbf{CPU tuning and frequency-pinned replication.}  The final ablation and
 ping-pong runs were collected on the native Linux host with Core~1 and Core~2
@@ -679,15 +683,16 @@ POSIX-MQ message-size limit and are reported as N/A.
 \textbf{(4) UNIX Socket wins at 1\,MiB.}
 241.09\,$\mu$s vs.\ 267.2--281.2\,$\mu$s for SHM variants.  On this host,
 the socket's buffering path outperforms the fixed-slot SHM configuration at
-this payload size; the experiment does not isolate a single kernel cause.
+this payload size, but the experiment does not isolate a kernel cause or repeat
+the comparison beyond 2\,000 rounds.  It is therefore a host-specific
+observation, not a general transport recommendation.
 
 \subsection{Ablation: Wakeup Variant Comparison (Suite 2)}
 
 At 1\,MiB, all six SHM variants converge near 267--281\,$\mu$s
 (Table~\ref{tab:pingpong}). Copying 1\,MiB across the ring
-dominates all wakeup mechanism overhead, making wakeup selection irrelevant at
-that message size.  Wakeup mechanism matters only when message service time is
-short enough to be latency-dominated.
+dominates all wakeup mechanism overhead in this configuration.  Wakeup
+selection may matter less when message service time is payload-dominated.
 
 \subsection{Streaming Throughput: Saturated Regime (Suite 1)}
 
@@ -787,9 +792,10 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
 \textbf{Frequency-controlled interpretation.}  The final bursty and
 offered-load runs were collected with the \texttt{performance} governor and
 Turbo disabled.  This removes dynamic P-state frequency scaling as an
-explanation for the approximately millisecond-scale low-load values, although
-C-state exit and scheduler delay remain part of the measured end-to-end wakeup
-path.  The close values for futex, eventfd, and interrupt-mode
+explanation for the approximately millisecond-scale low-load values.  C-state
+residency and scheduler delay were not traced, so they remain plausible but
+unverified contributors to the measured end-to-end wakeup path.  The close
+values for futex, eventfd, and interrupt-mode
 \texttt{io\_uring} support the limited conclusion that no configuration has a
 decisive advantage for a single SPSC sleeping wakeup on this platform.
 
@@ -806,8 +812,10 @@ intentional 1\,ms inter-burst gap, whereas E2E P50 starts at each message's
 \texttt{slot.send\_ns} publication timestamp and is calculated over all
 messages.  The low SQPOLL E2E median consequently shows that most SQPOLL
 messages incurred little within-burst queue residence; because this suite does
-not trace SQ-thread service order or per-burst scheduler alignment, we do not
-attribute the disparity to an intrinsic SQPOLL wakeup advantage.
+not trace SQ-thread service order, per-burst scheduler alignment, or queue
+residence for the other variants, the source of the unusually low E2E median
+remains unresolved.  We therefore do not attribute it to an intrinsic SQPOLL
+wakeup advantage or use it as a comparative latency result.
 
 \begin{table}[!t]
   \centering
@@ -838,8 +846,9 @@ kernel-sleeping variants
 (\texttt{futex}, \texttt{eventfd}, \mbox{\texttt{io\_uring}}),
 median latency dynamically scales down as load
 increases---dropping from $\approx$1374--1441\,$\mu$s at 25\% load
-down to $\approx$103\,$\mu$s at 90\% load as the shorter inter-arrival gaps
-reduce opportunities for deep idle and scheduler descheduling.
+down to $\approx$103\,$\mu$s at 90\% load.  The shorter inter-arrival gaps
+are consistent with less idle residency and scheduler descheduling, but this
+mechanism was not independently measured.
 At saturation, \texttt{io\_uring}'s higher latency (0.93\,$\mu$s)
 compared to \texttt{futex}/\texttt{eventfd} (0.26--0.28\,$\mu$s) reflects the constant overhead of
 SQE/CQE ring management on the non-blocking fast path.
@@ -847,8 +856,9 @@ SQPOLL follows the same load-dependent trend (1258.4 to 106.9\,$\mu$s from
 25\% to 90\%) but records 3.97\,$\mu$s at saturation, so it is not a
 zero-overhead replacement in this configuration.
 \texttt{adaptive} hybrid spinning captures the best of both worlds,
-reducing low-load sleep penalties while achieving pure spinning
-performance (0.09\,$\mu$s) under saturation.
+reducing low-load sleep penalties while achieving near-spinning
+performance (0.09\,$\mu$s) under saturation; this describes latency and CPU
+time, not measured energy use.
 
 The bursty-regime protocol (Table~\ref{tab:bursty}: 64-message burst,
 then a fixed 1\,ms idle gap) and the offered-load sweep
@@ -857,18 +867,18 @@ saturated rate) are deliberately different idle-gap
 structures and are not directly comparable message-for-message.  The
 fixed 1\,ms gap in the bursty protocol is shorter than the mean
 inter-arrival gap implied by 25\% of saturated throughput at 64\,B, so
-the CPU has less time to fall to a deeper idle C-state before the next
-burst arrives---producing the lower
+the CPU has less time to become idle before the next
+burst arrives---a plausible explanation for the lower
 $\approx$1090--1104\,$\mu$s wakeup latency in Table~\ref{tab:bursty}
 relative to Table~\ref{tab:offeredload}'s 25\%-load row. As offered
 load rises toward saturation in Table~\ref{tab:offeredload}, the mean
 inter-arrival gap shrinks below the bursty protocol's fixed 1\,ms gap,
-which is why the 90\%-load row ($\approx$103\,$\mu$s) falls below
-the bursty-regime figures despite both nominally representing ``low
+which is consistent with the 90\%-load row ($\approx$103\,$\mu$s) falling
+below the bursty-regime figures despite both nominally representing ``low
 load'' conditions in isolation.  The two tables should be read as
-separate experimental protocols probing the same underlying C-state
-ramp-up effect from different angles, not as repeated measurements of the
-same condition.
+separate experimental protocols with different idle-gap structure, not as
+demonstrations of a measured C-state ramp-up effect or repeated measurements
+of the same condition.
 
 \subsection{Controlled Throughput Provenance}
 \label{sec:provenance}
@@ -935,7 +945,8 @@ relative to the simpler blocking mechanisms.  At 64\,B it produces a
 with SQE/CQE submission overhead.  The bursty observations place all three
 kernel-sleeping variants in a similar range under recorded fixed-frequency
 settings.  The SQPOLL result is also close, so this workload exposes no
-decisive io\_uring-mode advantage over futex or eventfd.
+decisive wakeup-metric advantage over futex or eventfd; its anomalous E2E
+median remains unresolved and is not used for this comparison.
 
 The primary performance advantage of SHM-based IPC originates entirely from replacing
 kernel-copy data paths with shared-memory \texttt{memcpy}---not from the wakeup
@@ -964,7 +975,7 @@ requires a dedicated spinning core; adaptive waiting blocks after its spin windo
 \texttt{futex} only when the ring is genuinely empty, reducing measured CPU
 time during burst-idle operation while preserving the hot path.
 
-\paragraph{Cloud Microservices / Energy-Constrained Environments.}
+\paragraph{Cloud Microservices / CPU-Time-Constrained Environments.}
 Use SHM ring with \texttt{futex} or \texttt{eventfd}.  Both use blocking
 waits and deliver approximately 5\,$\mu$s P50 and sub-6.5\,$\mu$s P99 at
 64\,B in depth-1 ping-pong. \texttt{eventfd} integrates naturally
@@ -981,9 +992,11 @@ eliminates the complexity of maintaining parallel \texttt{epoll} and
 \texttt{futex} contexts and provides a clear upgrade path to SQPOLL mode.
 
 \paragraph{Large Payloads ($>$1\,MiB) or Deep Buffering.}
-Use UNIX Domain Sockets.  At 1\,MiB, UNIX Socket achieves 241.1\,$\mu$s P50
-vs.\ 267.2--281.2\,$\mu$s for SHM ring variants. The measurements establish
-the configuration-level result but do not isolate a single kernel mechanism.
+Treat the UNIX-socket result as a follow-up candidate, not a default choice.
+At 1\,MiB, UNIX Socket achieves 241.1\,$\mu$s P50 versus 267.2--281.2\,$\mu$s
+for SHM ring variants on this host.  Because the comparison has only 2\,000
+rounds and lacks copy-path and syscall profiling, its cause and generality
+remain unestablished.
 
 \subsection{Ring-Depth Constraint at 1 MiB}
 
@@ -1043,7 +1056,10 @@ does not claim that every Aeron deployment uses the same strategy.
   \item \textbf{Single node and microarchitecture.}  All experiments ran on one
         Intel 12th-Gen x86\_64 laptop.  Results on ARM64, AMD Zen, or
         multi-socket NUMA may differ due to different cache-coherency
-        protocols and scheduler implementations.
+        protocols and scheduler implementations.  The host has hybrid P/E
+        cores; logical CPU IDs were pinned, but their core class was not
+        independently recorded, limiting interpretation of scheduler-sensitive
+        tail latency.
 
   \item \textbf{SPSC topology only.}  Results apply to Single-Producer
         Single-Consumer queues.  MPMC rings require CAS loops introducing
@@ -1069,12 +1085,17 @@ does not claim that every Aeron deployment uses the same strategy.
 
   \item \textbf{SQPOLL scope.}  SQPOLL is evaluated as a separate 64-slot,
         single-channel configuration.  Its result does not generalize to
-        multi-FD batching or other SQPOLL thread-affinity choices.
+        multi-FD batching or other SQPOLL thread-affinity choices.  Its
+        anomalously low Suite~1 E2E median is not used as a comparative result
+        because the current instrumentation cannot explain its queue-residence
+        difference.
 
   \item \textbf{Tail-percentile provenance.}  Table~\ref{tab:pingpong} is
         derived only from the root \texttt{data/pingpong\_*\_summary.csv}
         files.  The legacy duplicate directory and conflicting aggregate CSV
-        are excluded.  POSIX MQ has no valid 1\,MiB result.
+        are excluded.  POSIX MQ has no valid 1\,MiB result.  The 1\,MiB
+        distributions contain 2\,000 rounds, so their P99.9 estimates are
+        exploratory (approximately two samples lie beyond that percentile).
 \end{enumerate}
 
 % ─────────────────────────────────────────────────────────────────────────────
@@ -1102,8 +1123,8 @@ we isolated the true contribution of \texttt{io\_uring} to IPC latency.
 
   \item \textbf{Spinning variants dominate sub-$\mu$s latency requirements.}
         \texttt{adaptive} is the preferred choice: it achieves 345\,ns
-        hot-path latency and gracefully reduces CPU consumption during
-        idle periods.
+        hot-path latency and lowers recorded CPU time during idle periods.
+        This study does not measure energy or package power.
 
   \item \textbf{The 1\,MiB throughput convergence may reflect ring depth.}
         A controlled ring-depth sweep is needed to test whether increasing
