@@ -34,6 +34,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <unistd.h>
 #include <vector>
 #include <cstring>
@@ -245,26 +246,43 @@ int main(int argc, char** argv) {
 
         // Open FIFOs (both sides of each FIFO must be open O_RDWR to avoid
         // blocking on open when no reader/writer is present yet)
-        int fifo_fwd = open(PP_FIFO_FWD, O_RDWR);
-        int fifo_bwd = open(PP_FIFO_BWD, O_RDWR);
+       int fifo_fwd = open(PP_FIFO_FWD, O_RDWR);
+       int fifo_bwd = open(PP_FIFO_BWD, O_RDWR);
 
-        pid_t child = fork();
-        if (child < 0) { std::perror("fork"); return 1; }
+        // The child must confirm that its io_uring instances were created
+        // before the parent begins the depth-1 exchange.  Without this
+        // handshake, an SQPOLL permission/setup failure in the child leaves
+        // the parent blocked forever waiting for an echo.
+        int startup_pipe[2];
+        if (pipe(startup_pipe) != 0) {
+            std::perror("pipe");
+            return 1;
+        }
 
-        if (child == 0) {
-            // Child echo server: reads fwd, writes bwd
-            struct PPShm shm_child{};
+       pid_t child = fork();
+       if (child < 0) { std::perror("fork"); return 1; }
+
+       if (child == 0) {
+           // Child echo server: reads fwd, writes bwd
+            close(startup_pipe[0]);
+           struct PPShm shm_child{};
             // Map the same SHMs in child
             (void)shm_child; // not used directly, we use ch_fwd/ch_bwd from parent mapping
             // After fork, child inherits parent's mmap — no re-mapping needed
             pp_set_affinity(PP_ECHO_CORE);
 
            struct io_uring ring_rd{}, ring_wr{};
-            if (init_uring(&ring_rd) < 0 || init_uring(&ring_wr) < 0) {
-                std::perror("io_uring_queue_init");
-                _exit(2);
-            }
-            std::vector<char> buf(sz);
+           if (init_uring(&ring_rd) < 0 || init_uring(&ring_wr) < 0) {
+               std::perror("io_uring_queue_init");
+                const char status = 'E';
+                (void)write(startup_pipe[1], &status, 1);
+                close(startup_pipe[1]);
+               _exit(2);
+           }
+            const char status = 'R';
+            (void)write(startup_pipe[1], &status, 1);
+            close(startup_pipe[1]);
+           std::vector<char> buf(sz);
             size_t total = PP_WARMUP + n_rounds;
             for (size_t i = 0; i < total; ++i) {
                 channel_read(ch_fwd, buf.data(), &ring_rd, fifo_fwd);
@@ -275,17 +293,29 @@ int main(int argc, char** argv) {
             _exit(0);
         }
 
-        // Parent: initiator on Core A
-        pp_set_affinity(PP_INITIATOR_CORE);
+       // Parent: initiator on Core A
+        close(startup_pipe[1]);
+       pp_set_affinity(PP_INITIATOR_CORE);
 
        struct io_uring ring_wr{}, ring_rd{};
-        if (init_uring(&ring_wr) < 0 || init_uring(&ring_rd) < 0) {
-            std::perror("io_uring_queue_init");
-            waitpid(child, nullptr, WNOHANG);
+       if (init_uring(&ring_wr) < 0 || init_uring(&ring_rd) < 0) {
+           std::perror("io_uring_queue_init");
+            close(startup_pipe[0]);
+            kill(child, SIGTERM);
+            waitpid(child, nullptr, 0);
+           return 2;
+       }
+
+        char child_status = 'E';
+        const ssize_t status_bytes = read(startup_pipe[0], &child_status, 1);
+        close(startup_pipe[0]);
+        if (status_bytes != 1 || child_status != 'R') {
+            std::cerr << "Child io_uring setup failed; aborting benchmark.\n";
+            waitpid(child, nullptr, 0);
             return 2;
         }
 
-        std::vector<char>     payload(sz, 0xEF);
+       std::vector<char>     payload(sz, 0xEF);
         std::vector<uint64_t> rtts;
         rtts.reserve(n_rounds);
 
