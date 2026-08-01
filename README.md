@@ -1,254 +1,159 @@
-# A Comparative Performance and Ablation Analysis of Linux IPC Mechanisms: POSIX Pipes, UNIX Domain Sockets, POSIX Message Queues, and `io_uring` Shared-Memory Rings
+# Linux IPC Wakeup and Shared-Memory Ring Measurement Study
 
----
+This repository contains a controlled Linux IPC performance study. It separates two questions that are often conflated:
 
-## Abstract
+1. How much performance comes from moving payloads through a cache-aligned shared-memory SPSC ring?
+2. Once that data path is fixed, how do busy polling, spin backoff, adaptive waiting, futex, eventfd, interrupt-mode `io_uring`, and SQPOLL compare as wakeup mechanisms?
 
-Modern concurrent systems increasingly shift toward decoupled, microservices-based, and multi-process architectures, heightening the reliance on Inter-Process Communication (IPC) throughput, latency, and CPU efficiency. Traditionally, IPC mechanisms like POSIX Pipes, UNIX Domain Sockets, and POSIX Message Queues have mediated data transfers through the Linux kernel, incurring system-call transitions, context-switching latency, and memory copies. 
+The central result is that the shared-memory ring supplies the performance gain. For a single SPSC wakeup, interrupt-mode `io_uring` is competitive with futex and eventfd under bursty traffic but has higher strict depth-1 per-event latency. SQPOLL was measured separately and did not improve this single-channel workload.
 
-This paper presents a comprehensive empirical evaluation comparing traditional kernel-mediated IPC mechanisms against a lock-free, cache-aligned **Shared Memory Ring Buffer with `io_uring`-assisted out-of-band wakeup coordination**. The hot data path moves through POSIX shared memory (`/dev/shm`) via Single-Producer Single-Consumer (SPSC) atomic indexing (`head` and `tail`), keeping payload transfers entirely in userspace. Out-of-band wakeup notifications are managed asynchronously via `io_uring` ring submission queues. 
+## Current canonical results
 
-Our evaluation includes a **Two-Suite Experimental Methodology**:
-1. **Ablation Study**: Evaluates 6 distinct wakeup strategies (`busy_poll`, `spin_backoff`, `adaptive`, `futex`, `eventfd`, `io_uring`) under both **`saturated`** (streaming throughput) and **`bursty`** (intermittent arrival) traffic regimes across an exponential payload sweep ($64\text{ B}$ to $1\text{ MiB}$).
-2. **Ping-Pong Latency Suite**: Enforces a strict **Queue Depth = 1** request-response protocol with single-clock `CLOCK_MONOTONIC_RAW` sampling on a pinned core to eliminate queue backlog delay and cross-core hardware TSC clock drift, measuring exact median (P50), P90, P99, and P99.9 tail percentiles.
+All final claims are taken from the root `data/` CSV files and the current paper source, [`report.tex`](report.tex). Older standalone transport CSVs are retained for provenance but are not mixed with the controlled ablation conclusions.
 
-Empirical results demonstrate that shared-memory ring buffers achieve sub-microsecond median latencies (**208 nanoseconds** at 64 B with `busy_poll`) and up to **6.5×** throughput improvements over kernel-mediated baselines, while `io_uring`, `futex`, and `eventfd` wakeups provide 0% idle CPU utilization with sub-15µs wakeup latencies.
+### Depth-1 ping-pong, 64 B, median single-trip latency
 
----
+| Transport / wakeup | P50 (us) |
+|---|---:|
+| SHM adaptive | 0.345 |
+| SHM busy poll | 0.381 |
+| SHM futex | 5.001 |
+| SHM eventfd | 5.039 |
+| Pipe | 5.290 |
+| UNIX socket | 5.496 |
+| POSIX MQ | 5.567 |
+| SHM interrupt-mode `io_uring` | 8.150 |
 
-## I. Introduction
+The protocol has queue depth one. The initiator records both timestamps on CPU 1 with `CLOCK_MONOTONIC_RAW`, and single-trip latency is RTT/2.
 
-Inter-Process Communication is the bedrock of high-performance concurrent computing on Unix-like operating systems. High-frequency trading (HFT) platforms, database engines, and microservice mesh routers demand IPC mechanisms capable of transferring gigabytes of telemetry data per second with minimal CPU overhead and sub-microsecond latency.
+### Controlled saturated shared-ring throughput
 
-Traditional IPC mechanisms rely on kernel-mediated buffer management:
-- **POSIX Pipes**: Uni-directional byte streams with implicit kernel synchronization.
-- **UNIX Domain Sockets (`AF_UNIX`)**: Socket-buffer queues bypassing network stacks but still requiring socket VFS overhead.
-- **POSIX Message Queues (`mqueue`)**: Structured, priority-based message delivery constrained by VFS inode locks and kernel queue caps.
+| Wakeup configuration | 64 KiB (GiB/s) | 1 MiB (GiB/s) |
+|---|---:|---:|
+| Busy poll | 15.75 | 8.65 |
+| Spin backoff | 14.54 | 8.61 |
+| Adaptive | 15.53 | 8.36 |
+| Futex | 15.60 | 8.18 |
+| Eventfd | 13.74 | 8.37 |
+| Interrupt-mode `io_uring` | 13.37 | 8.12 |
+| `io_uring` SQPOLL, separate run | 6.66 | 4.45 |
 
-While kernel mediation enforces strict process isolation, it mandates context switches (`sys_enter_write`, `sys_enter_read`), user-kernel memory copies, and CPU scheduler preemptions. To bypass these limitations, zero-copy shared memory regions are used. However, synchronizing access to shared memory typically introduces lock contention or kernel context switches.
+The legacy direct `io_uring` harness contains a 28.17 GiB/s observation from a different workload and environment. It is not used as a controlled cross-mechanism result.
 
-This research presents a complete architecture and ablation analysis of a **lock-free SPSC shared-memory ring buffer paired with `io_uring` async notifications**, comparing its raw throughput, latency distributions, CPU core consumption, and tail-latency percentiles against standard baselines under hardware-pinned CPU affinity controls.
+### Frequency-pinned wakeup experiments
 
----
+The bursty and offered-load runs were collected with the benchmark processes pinned to CPUs 1 and 2, the `performance` governor enabled on both CPUs, and turbo disabled. Environment records are stored in:
 
-## II. System Architecture & Topologies
+- `data/environment_ablation.txt`
+- `data/environment_pingpong.txt`
 
-```mermaid
-graph TD
-    subgraph POSIX Pipe
-        P1[Producer Core 1] -->|write| K_FIFO[Kernel FIFO Buffer]
-        K_FIFO -->|read| C1[Consumer Core 2]
-    end
-    subgraph UNIX Socket
-        P2[Producer Core 1] -->|sendmsg| K_SKB[Kernel Socket Buffer]
-        K_SKB -->|recvmsg| C2[Consumer Core 2]
-    end
-    subgraph POSIX MQ
-        P3[Producer Core 1] -->|mq_send| K_MQ[Kernel Mqueue Inode]
-        K_MQ -->|mq_receive| C3[Consumer Core 2]
-    end
-    subgraph io_uring Shared Ring
-        P4[Producer Core 1] -->|memcpy + head.store| SHM_RING[Mmapped Shared Ring]
-        C4[Consumer Core 2] -->|tail.load + tail.store| SHM_RING
-        P4 -.->|io_uring WRITE wakeup byte| FIFO[/Named FIFO/]
-        FIFO -.->|io_uring READ blocks until wakeup| C4
-    end
-```
+At 64 B in the bursty protocol, median wakeup latency was 1091.92 us for futex, 1093.81 us for eventfd, 1094.98 us for interrupt-mode `io_uring`, and 1058.47 us for SQPOLL. These values include the protocol's idle-gap behavior and must not be interpreted as isolated syscall latency.
 
-### A. Lock-Free SPSC Shared-Memory Architecture
-The shared-memory ring buffer maps a cache-aligned `RingBuffer` struct into POSIX shared memory (`/dev/shm/ipc_ablation_ring`):
-- **Cache-Line Separation (`alignas(64)`)**: The `head` and `tail` atomic indices are aligned to independent 64-byte boundaries. This prevents **false sharing** (cache-line invalidation traffic between Core 1 and Core 2).
-- **Sequential Consistency Barriers**: Atomic operations use `std::memory_order_seq_cst` to prevent store-load CPU instruction reordering.
-- **Out-of-Band Wakeup Coordination**: An atomic flag `consumer_sleeping` tracks whether the consumer thread is active or asleep. Wakeup signals are issued only when `consumer_sleeping == 1`, avoiding unnecessary kernel syscalls during active streaming.
+## Experimental suites
 
-### B. The 6 Wakeup Mechanisms (Ablation Study)
+### 1. Shared-ring wakeup ablation
 
-| Variant | Wait Strategy | Wakeup Signal | Idle CPU | Microsecond Latency | Use Case |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`busy_poll`** | Tight memory loop | None (always checking) | 100% Core | **Ultra-Low (<0.25 µs)** | High-Frequency Trading (HFT) |
-| **`spin_backoff`**| Loop + `PP_PAUSE()` backoff | None (always checking) | High | **Very Low (<0.5 µs)** | Low-power userspace spinning |
-| **`adaptive`** | Spin 500 iters, then sleep | `futex` WAKE | Low | **Dynamic (0.2 – 10 µs)** | General-purpose high-load systems |
-| **`futex`** | System sleep (`FUTEX_WAIT`) | `futex` WAKE (`FUTEX_WAKE`) | **0%** | **Low-Medium (2 – 10 µs)** | Standard Linux thread sleep |
-| **`eventfd`** | System block (`poll`/`read`) | Eventfd write | **0%** | **Low-Medium (2 – 10 µs)** | Kernel file-descriptor event loop |
-| **`io_uring`** | `io_uring_submit_and_wait` | Write to Signal FIFO | **0%** | **Optimized Medium** | Asynchronous event-driven IPC |
+`src/ablation/` holds the payload ring constant and varies only waiting and signaling. The six primary variants are:
 
----
+- `busy_poll`
+- `spin_backoff`
+- `adaptive`
+- `futex`
+- `eventfd`
+- interrupt-mode `io_uring`
 
-## III. Experimental Methodology
+SQPOLL is an additional, separately labelled `io_uring` configuration. The arrival regimes are `saturated`, `bursty`, `offered_25`, `offered_50`, `offered_75`, and `offered_90`.
 
-To isolate IPC overhead from OS scheduling jitter and hardware cache anomalies, we enforce the following experimental controls:
+### 2. Corrected depth-1 ping-pong
 
-### A. Two-Suite Benchmark Design
-1. **Ablation Study (`src/ablation/run_ablation.sh`)**:
-   - Sweeps all 6 wakeup variants (`busy_poll`, `spin_backoff`, `adaptive`, `futex`, `eventfd`, `io_uring`) across **`saturated`** (maximum streaming throughput) and **`bursty`** (per-burst inter-arrival delay) traffic regimes.
-   - Dynamically scales payload transfer volume ($16\text{ MiB}$ for small messages, $128\text{ MiB}$ for medium, $512\text{ MiB}$ for large) to provide over **260,000 statistical iterations per run** while executing sweeps in minutes.
-2. **Ping-Pong Latency Suite (`src/pingpong/run_pingpong.sh`)**:
-   - Enforces **Queue Depth = 1**: The initiator sends 1 message and stops; the responder echoes 1 message back. Exactly 1 message is in flight, eliminating queue backlog delay and pipelining distortion.
-   - Evaluates **100,000 round-trip samples** per payload size to calculate exact median (P50), P90, P99, and P99.9 tail percentiles.
+`src/pingpong/` compares pipe, UNIX socket, POSIX MQ, SHM plus interrupt-mode `io_uring`, and the six shared-ring wakeup variants. It reports P50, P90, P99, P99.9, and a 95% confidence interval for every successful size.
 
-### B. Single-Clock Source (`CLOCK_MONOTONIC_RAW`) & Hardware Core Affinity
-Cross-core hardware Time Stamp Counters (TSCs) drift by nanoseconds or microseconds. Taking $t_{\text{send}}$ on Core 1 and $t_{\text{recv}}$ on Core 2 introduces clock drift errors.
-- **Single Clock Source**: Both $t_{\text{start}}$ and $t_{\text{end}}$ are sampled on the **Initiator thread on Core 1** using hardware-fenced `CLOCK_MONOTONIC_RAW`:
-  $$\text{Single-Trip Latency} = \frac{t_{\text{end}} - t_{\text{start}}}{2}$$
-- **CPU Core Affinity**: Tasks are statically pinned using `sched_setaffinity`:
-  - **Producer / Initiator Core**: Pinned to **CPU Core 1**.
-  - **Consumer / Echo Server Core**: Pinned to **CPU Core 2**.
+Measured rounds are size-scaled:
 
-### C. Message Size Sweep Matrix
-Benchmarks are executed across an exponential sweep of payload sizes $S \in \{64\text{ B}, 256\text{ B}, 1024\text{ B}, 4\text{ KiB}, 16\text{ KiB}, 64\text{ KiB}, 256\text{ KiB}, 1\text{ MiB}\}$.
+| Payload | Rounds |
+|---|---:|
+| 64 B, 256 B, 1 KiB | 100,000 each |
+| 4 KiB | 50,000 |
+| 16 KiB | 20,000 |
+| 64 KiB | 10,000 |
+| 256 KiB | 5,000 |
+| 1 MiB | 2,000 |
 
-### D. Analytical Metrics & Checksum Verification
-For each message size class, the benchmark executes 1 warmup run (discarded) and $N = 15$ measured runs for statistics stabilization across all IPC mechanisms.
-1. **Throughput ($T$)**: $$T = \frac{B}{1024^3 \times t_{\text{exec}}} \quad (\text{GiB/s})$$
-2. **End-to-End Latency ($L_i$)**: $$L_i = t_{\text{recv}, i} - t_{\text{send}, i} \quad (\mu\text{s})$$
-3. **Latency Standard Deviation ($\sigma$)**: $$\sigma = \sqrt{\frac{1}{M}\sum_{i=1}^M (L_i - \bar{L})^2}$$
-4. **Checksum Verification**: Consumer performs a strided cache-line payload touch ($\sum_{k=0}^{S/64} \text{Payload}[64 \times k]$) to force physical L1/L2 data cache fills.
+POSIX MQ has canonical results through 64 KiB. Its 1 MiB result is `N/A` because that run was not supported by the configured kernel message-size limit; the report preserves `N/A` rather than estimating a value.
 
-### E. Workload Target Sizing
-- **POSIX Pipes & POSIX Message Queues (Dynamic Sizing)**:
-  - Small Payloads ($\le 1$ KiB): $32$ MiB total transfer.
-  - Medium Payloads ($\le 64$ KiB): $256$ MiB total transfer.
-  - Large Payloads ($> 64$ KiB): $2$ GiB total transfer.
-- **UNIX Domain Sockets & `io_uring` Shared Ring (Static Sizing)**:
-  - All Payload Sizes ($64$ Bytes to $1$ MiB): $2$ GiB total transfer.
+## Requirements
 
-### F. Reference Test Environment
-All benchmark runs and profiling tasks were executed on a dedicated test machine with the following physical and operating system specifications:
-- **System Model**: ASUS Vivobook K3605ZF (Vivobook_ASUSLaptop K3605ZF_K3605ZF)
-- **Operating System**: Ubuntu 24.04.4 LTS (noble)
-- **CPU Architecture**: `x86_64`
-- **Processor**: 12th Gen Intel(R) Core(TM) i5-12500H
-  - **Thread/Core Layout**: 12 Physical Cores (16 Threads, 1 Socket)
-  - **Frequency**: Max 4500.00 MHz / Min 400.00 MHz
-  - **Caches**: L1d 448 KiB (12 instances), L1i 640 KiB (12 instances), L2 9 MiB (6 instances), L3 18 MiB (1 instance)
-- **System Memory**: 16 GiB System Memory (2x 8GiB SODIMM DDR4 Synchronous 3200 MHz)
-- **Virtual Memory**: 4.0 GiB Swap
-- **Storage**: 512GB NVMe SSD (SAMSUNG MZVL4512HBLU-00BTW)
-- **Graphics Processors**:
-  - Integrated: Intel Corporation Alder Lake-P GT2 [Iris Xe Graphics]
-  - Dedicated: NVIDIA Corporation GA107M [GeForce RTX 2050]
+- Bare-metal Linux is recommended for publication measurements. A VM is suitable for compilation and functional checks but adds hypervisor scheduling and virtual-timer noise.
+- Linux kernel with `io_uring` support
+- `g++`, `liburing-dev`, Python 3, Matplotlib, and NumPy
+- `cpupower` or equivalent governor controls
+- Permission to use SQPOLL where required by the host kernel
 
----
+Example Ubuntu installation:
 
-## IV. Repository Structure
-
-```
-.
-├── src/
-│   ├── ablation/                     # Benchmark #1: Wakeup Mechanism Ablation
-│   │   ├── common.h                  # Common definitions and dynamic sizing logic
-│   │   ├── ring.h                    # Cache-aligned RingBuffer layout
-│   │   ├── wakeup.h                  # Implementations of all 6 wakeup variants
-│   │   ├── producer.cpp              # Ablation producer application
-│   │   ├── consumer.cpp              # Ablation consumer application & telemetry
-│   │   └── run_ablation.sh           # Execution script for ablation sweep
-│   │
-│   └── pingpong/                     # Benchmark #2: Depth-1 Ping-Pong Latency Suite
-│       ├── common.h                  # Ping-pong structures and constants
-│       ├── pp_pipe.cpp               # POSIX Pipe ping-pong implementation
-│       ├── pp_socket.cpp             # UNIX Domain Socket ping-pong implementation
-│       ├── pp_mq.cpp                 # POSIX Message Queue ping-pong implementation
-│       ├── pp_shm_uring.cpp          # SHM + io_uring ping-pong implementation
-│       ├── pp_ablation.cpp           # SHM Ping-pong across all 6 wakeup variants
-│       └── run_pingpong.sh           # Execution script for ping-pong suite & plotting
-│
-├── data/                             # Output CSV datasets
-│   ├── ablation_*.csv                # Ablation per-variant CSV results
-│   ├── pingpong_*_summary.csv        # Per-IPC ping-pong summary results
-│   └── pingpong_results.csv          # Merged ping-pong results dataset
-│
-└── figures/                          # Generated publication-quality figures
-    └── pingpong/                     # Latency vs Size (P50, P90, P99, P99.9) PNG plots
-```
-
----
-
-## V. Execution and Reproducibility
-
-### A. System Configuration & Dependencies
-Install compiler toolchains, `liburing`, and Python plotting libraries:
 ```bash
 sudo apt update
 sudo apt install -y build-essential g++ liburing-dev python3 python3-matplotlib python3-numpy linux-tools-common linux-tools-$(uname -r)
 ```
 
-### B. Hardware & Kernel Optimizations
-Apply these two system optimizations before running benchmarks to lock CPU frequency and eliminate kernel queue backpressure caps:
-```bash
-# 1. Set CPU governor to maximum performance (eliminates CPU frequency scaling latency spikes)
-sudo cpupower frequency-set -g performance
+Before a final measurement run, configure the selected CPUs according to the host's driver and verify the result. Typical Intel commands are:
 
-# 2. Increase maximum POSIX Message Queue payload limits to 1 MiB
-sudo sysctl -w fs.mqueue.msgsize_max=1048576
-sudo sysctl -w fs.mqueue.msg_max=1024
+```bash
+sudo cpupower frequency-set -g performance
+echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo
 ```
 
-### C. Running the Benchmark Suites
+The scripts only record and validate these settings; they do not silently change them. Use `--require-fixed-frequency` to fail instead of continuing when validation is unsuccessful.
 
-#### Step 1: Benchmark Suite #1 — Ablation Study
-Executes the throughput and wakeup efficiency sweep across all 6 wakeup variants (`busy_poll`, `spin_backoff`, `adaptive`, `futex`, `eventfd`, `io_uring`) under `saturated` and `bursty` regimes:
+## Running the controlled experiments
+
+From the repository root:
+
 ```bash
 cd src/ablation
-bash run_ablation.sh --regime saturated --regime bursty
-```
-- **Outputs**: Per-variant CSV datasets saved in `data/ablation_*.csv`.
+bash run_ablation.sh --require-fixed-frequency
 
-#### Step 2: Benchmark Suite #2 — Ping-Pong Latency & Plot Generation
-Executes the Depth-1 ping-pong latency benchmark across Pipes, UNIX Sockets, POSIX MQ, and Shared Memory, aggregating results and generating publication charts:
-```bash
 cd ../pingpong
-bash run_pingpong.sh
+bash run_pingpong.sh --require-fixed-frequency
 ```
-- **Outputs**: Merged CSVs in `data/pingpong_results.csv` and PNG plots saved in `figures/pingpong/`.
 
----
+Run SQPOLL separately so it cannot be confused with interrupt mode:
 
-## VI. Key Quantitative Findings
+```bash
+cd src/ablation
+bash run_ablation.sh --variant io_uring --sqpoll --require-fixed-frequency
+```
 
-### A. Ping-Pong Unloaded Single-Trip Latency Sweep (Queue Depth = 1)
+Useful subset examples:
 
-*Single-trip median RTT/2 latency ($\mu\text{s}$) measured using `CLOCK_MONOTONIC_RAW` with CPU Core Affinity pinning:*
+```bash
+bash src/ablation/run_ablation.sh --variant futex --variant io_uring --regime bursty --regime offered_90
+bash src/pingpong/run_pingpong.sh --ipc pipe --ipc unix_socket
+```
 
-| Transport / Variant | 64 B | 4 KiB | 64 KiB | 1 MiB | P99 (64 B) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **`shm_ablation (adaptive)`** | **0.213 µs** | 1.286 µs | 13.476 µs | 152.353 µs | 0.582 µs |
-| **`shm_ablation (busy_poll)`** | **0.218 µs** | 1.286 µs | 12.995 µs | 152.540 µs | 0.306 µs |
-| **`shm_ablation (spin_backoff)`** | **0.411 µs** | 1.483 µs | 13.311 µs | 149.975 µs | 0.781 µs |
-| **`unix_socket`** | 3.029 µs | 5.008 µs | 15.674 µs | **137.911 µs** | 5.087 µs |
-| **`shm_ablation (eventfd)`** | 3.113 µs | 3.750 µs | 14.831 µs | 152.591 µs | 4.431 µs |
-| **`shm_ablation (futex)`** | 3.207 µs | 3.746 µs | 14.914 µs | 152.156 µs | 4.570 µs |
-| **`pipe`** | 3.294 µs | 3.922 µs | 19.822 µs | 261.026 µs | 4.669 µs |
-| **`posix_mq`** | 3.351 µs | 4.606 µs | *N/A (sysctl)* | *N/A (sysctl)* | 4.605 µs |
-| **`shm_io_uring`** | 4.374 µs | 5.302 µs | 16.171 µs | 154.707 µs | 6.368 µs |
+## Repository layout
 
----
+- `src/ablation/`: controlled shared-ring wakeup ablation
+- `src/pingpong/`: corrected depth-1 latency suite
+- `src/pipe/`, `src/sockets/`, `src/mq/`, `src/io_uring/`: standalone legacy throughput harnesses
+- `scripts/`: merging, analysis, statistics, perf parsing, and figure generation
+- `data/`: canonical CSVs, legacy CSVs, and captured environment metadata
+- `figures/`: generated publication figures
+- `report.tex` and `report.pdf`: current final report
+- `IEEE Submission/`: older submission packaging retained for reference; it is not the canonical report source
 
-### B. Ablation Streaming Throughput Sweep (Saturated Regime)
+## Reproducibility cautions
 
-*Mean throughput ($\text{GiB/s}$) across 15 runs under continuous streaming:*
+- Do not combine results from different machines, governors, turbo states, harnesses, or transfer volumes in one comparison table.
+- CPU affinity reduces scheduling variation but does not prove that two logical CPU IDs are separate physical cores. Confirm topology with `lscpu -e`.
+- CPU-utilization columns describe sampled process CPU time; values near zero are not proof of exactly zero CPU consumption.
+- SQPOLL results apply to the tested single-channel, 64-slot configuration and do not establish a general SQPOLL limit.
+- `throughput_gbps` is a historical CSV column name; calculations use GiB/s.
 
-| Wakeup Variant | 64 B | 4 KiB | 64 KiB (Peak) | 1 MiB |
-| :--- | :---: | :---: | :---: | :---: |
-| **`busy_poll`** | **0.667 GiB/s** | 18.77 GiB/s | **27.88 GiB/s** | 9.67 GiB/s |
-| **`spin_backoff`** | **0.677 GiB/s** | 18.75 GiB/s | 27.52 GiB/s | 9.66 GiB/s |
-| **`adaptive`** | 0.583 GiB/s | **18.89 GiB/s** | 27.10 GiB/s | 9.44 GiB/s |
-| **`io_uring`** | 0.370 GiB/s | 18.45 GiB/s | 27.75 GiB/s | 9.19 GiB/s |
-| **`eventfd`** | 0.632 GiB/s | 18.46 GiB/s | 26.83 GiB/s | 9.38 GiB/s |
-| **`futex`** | 0.637 GiB/s | 17.97 GiB/s | 26.69 GiB/s | 9.35 GiB/s |
+## Authors
 
----
+- Rahul Raman
+- Yuvraj Deshmukh
+- B. Thangaraju
 
-### C. Major Insights & System Trade-Offs
-
-1. **Sub-Microsecond Unloaded Latency**: The lock-free shared memory ring buffer with `adaptive` or `busy_poll` achieves a median single-trip latency of **213 – 218 nanoseconds** at 64 B payloads, outperforming traditional kernel IPC mechanisms (`pipe`, `unix_socket`, `posix_mq`) by **~15×**.
-2. **Zero-Idle-CPU Wakeups**: `futex`, `eventfd`, and `io_uring` wakeup variants consume **0% idle CPU** while delivering sub-15µs median round-trip latencies, providing an energy-efficient trade-off for cloud microservices.
-3. **Peak Throughput at 64 KiB**: Saturated streaming throughput hits **27.88 GiB/s (~29.9 GB/s)** at 64 KiB payload size. At 1 MiB, throughput throttles to ~9.2–9.7 GiB/s across all variants due to the fixed 64-slot ring buffer recycling constraint.
-4. **UNIX Socket Efficiency at Large Payloads**: UNIX Domain Sockets achieve the lowest 1 MiB latency (**137.91 µs**), outperforming shared memory rings due to kernel socket buffer page-flipping optimizations when ring slots are constrained.
-5. **Tail Latency Stability**: Hardware core pinning (`Core 1` and `Core 2`) combined with cache-line separation (`alignas(64)`) prevents false sharing, maintaining P99 tail latencies under 0.6 µs for spinning SHM variants at 64 B.
-
----
-
-## VII. References
-* `[1]` J. Axboe, "Efficient IO with io_uring," Linux Kernel Documentation, 2019.
-* `[2]` W. R. Stevens and S. A. Rago, *Advanced Programming in the UNIX Environment*, 3rd ed. Addison-Wesley, 2013.
-* `[3]` B. Gregg, *Systems Performance: Enterprise and the Cloud*, 2nd ed. Addison-Wesley, 2020.
+See [`report.tex`](report.tex) for the authoritative author affiliations, complete methodology, limitations, and bibliography.

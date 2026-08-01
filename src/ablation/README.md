@@ -1,93 +1,88 @@
-# Wakeup Mechanism Ablation Study
+# Shared-Ring Wakeup Ablation
 
-## Overview
+This suite holds the cache-aligned SPSC shared-memory ring and payload path constant while changing only `consumer_wait()` and `producer_signal()`. It is the controlled throughput, wakeup-latency, and CPU-efficiency experiment used by the final report.
 
-The ablation study isolates and benchmarks the performance of **6 distinct wakeup coordination strategies** on top of the same Single-Producer Single-Consumer (SPSC) shared-memory ring buffer layout. 
+## Configurations
 
-The goal of this study is to measure the latency, throughput, and CPU overhead trade-offs between spinning in userspace (ultra-low latency, 100% CPU usage) versus sleeping in the kernel (higher latency, 0% idle CPU usage) under different traffic regimes.
+The six primary variants are compiled from the same producer, consumer, and ring code:
 
----
+| Name | Wait/signal behavior |
+|---|---|
+| `busy_poll` | Tight userspace polling; no wakeup syscall |
+| `spin_backoff` | `_mm_pause()` with backoff/yield; no explicit wakeup |
+| `adaptive` | Bounded spin followed by futex sleep/wake |
+| `futex` | `FUTEX_WAIT` / `FUTEX_WAKE` |
+| `eventfd` | `poll`/`read` and `write` on eventfd |
+| `io_uring` | FIFO read/write submitted through interrupt-mode `io_uring` |
 
-## Wakeup Variants
+`io_uring` can also be run with `IORING_SETUP_SQPOLL` by setting `USE_SQPOLL=1`; the runner exposes this as `--sqpoll`. SQPOLL output is labelled `io_uring_sqpoll` and must be analysed separately from the six primary variants.
 
-The 6 wakeup mechanisms evaluated are:
+## Arrival regimes
 
-| Variant | Wait Strategy | Wakeup Signal | Idle CPU | Microsecond Latency | Use Case |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`busy_poll`** | Tight memory loop | None (always checking) | 100% Core | **Ultra-Low (<0.25 µs)** | High-Frequency Trading (HFT) |
-| **`spin_backoff`**| Loop + `PP_PAUSE()` backoff | None (always checking) | High | **Very Low (<0.5 µs)** | Low-power userspace spinning |
-| **`adaptive`** | Spin 500 iters, then sleep | `futex` WAKE | Low | **Dynamic (0.2 – 10 µs)** | General-purpose high-load systems |
-| **`futex`** | System sleep (`FUTEX_WAIT`) | `futex` WAKE (`FUTEX_WAKE`) | **0%** | **Low-Medium (2 – 10 µs)** | Standard Linux thread sleep |
-| **`eventfd`** | System block (`poll`/`read`) | Eventfd write | **0%** | **Low-Medium (2 – 10 µs)** | Kernel file-descriptor event loop |
-| **`io_uring`** | `io_uring_submit_and_wait` | Write to Signal FIFO | **0%** | **Optimized Medium** | Asynchronous event-driven IPC |
+- `saturated`: producer sends as quickly as possible.
+- `bursty`: a 64-message burst followed by a fixed 1 ms gap.
+- `offered_25`, `offered_50`, `offered_75`, `offered_90`: controlled offered-load levels derived from the configured inter-arrival gaps.
 
----
+The offered-load and bursty protocols use different gap structures and are not repeated measurements of the same condition.
 
-## Traffic Regimes
+## Measurement controls
 
-The variants are swept across two distinct arrival traffic patterns:
-1. **`saturated`**: The producer streams messages back-to-back as fast as possible to measure maximum possible throughput.
-2. **`bursty`**: The producer groups messages into bursts (every 64 messages) followed by a **1 ms sleep gap** to force the consumer thread to sleep and exercise core wake-up latencies.
+- Producer is requested on logical CPU 1 and consumer on logical CPU 2.
+- `benchmark_env.sh` records the CPU model, kernel, selected cores, governor, and turbo/boost state.
+- `--require-fixed-frequency` rejects a run unless the selected CPUs use the `performance` governor and turbo/boost is disabled.
+- Each payload/configuration has one discarded warmup plus 15 recorded runs.
+- Payload sizes are 64 B through 1 MiB.
+- Transfer volume is size-scaled by `get_total_bytes()` in `common.h`.
 
----
+Affinity reduces scheduler movement but does not guarantee that CPU IDs 1 and 2 are different physical cores on every machine. Check the host topology with `lscpu -e`.
 
-## Directory Structure
+## Build and run
 
-* **`common.h`**: Defines target affinity, message sizes, and shared-memory naming configurations.
-* **`ring.h`**: Configures the cache-aligned (`alignas(64)`) `RingBuffer` struct to prevent false sharing.
-* **`wakeup.h`**: Implements the wait/signal interfaces for all 6 variants.
-* **`consumer.cpp`**: Spawns the consumer thread, maps shared memory, executes the benchmark hot loops, and records telemetry.
-* **`producer.cpp`**: Spawns the producer thread, synchronizes with the consumer via the mapping barrier, and sends payload streams.
-* **`run_ablation.sh`**: Orchestrates the entire compilation, execution, CSV merging, and performance tracking flow.
+From this directory:
 
----
-
-## Execution and Reproducibility
-
-### 1. Basic Run
-To run the full suite (variant × regime × payload sizes) cleanly:
-```bash
-cd src/ablation
-bash run_ablation.sh
-```
-*Outputs are saved under `data/ablation_*.csv` and merged into `data/ablation_results.csv`.*
-
-### 2. Dry Run (Compile Only)
-To verify compilation on your machine:
 ```bash
 bash run_ablation.sh --dry-run
+bash run_ablation.sh --require-fixed-frequency
 ```
 
-### 3. Profiling Cache Misses & Syscalls
-To capture context-switches, system calls, L1 cache loads/misses, and LLC loads/misses using `perf stat`:
+Run selected variants or regimes:
+
 ```bash
-bash run_ablation.sh --perf
+bash run_ablation.sh \
+  --variant futex --variant eventfd --variant io_uring \
+  --regime bursty --regime offered_90 \
+  --require-fixed-frequency
 ```
-*Performance stats are stored in `data/ablation_perf_stat.txt`.*
 
-### 4. Running a Specific Configuration
-To sweep only a subset of variants or regimes:
+Run SQPOLL separately:
+
 ```bash
-bash run_ablation.sh --variant futex --variant eventfd --regime bursty
+bash run_ablation.sh \
+  --variant io_uring --sqpoll \
+  --require-fixed-frequency
 ```
 
----
+Optional `--perf` runs the consumer under `perf stat` and records selected syscall, context-switch, and cache events. Availability depends on kernel permissions and tracepoints.
 
-## Analysis & Visualizations
+## Outputs
 
-After completing the runs, you can parse the raw data and generate figures using the Python analysis scripts:
-```bash
-cd ../../
-python3 scripts/ablation_analysis.py --data data/ablation_results.csv --perf data/ablation_perf_stat.txt --output figures/ablation/
-```
-This produces:
-* `figures/ablation/fig1_wakeup_latency.png` (evaluates wakeup latencies in bursty conditions)
-* `figures/ablation/fig2_throughput_regime.png` (compares saturated throughput vs bursty payload sweeps)
+- `data/ablation_<variant>_<regime>.csv`: individual runs
+- `data/ablation_results.csv`: merged data with corrected regime labels
+- `data/environment_ablation.txt`: environment capture
+- `data/ablation_perf_stat.txt`: optional performance-counter output
+- `figures/ablation/fig1_wakeup_latency.png`
+- `figures/ablation/fig2_throughput_regime.png`
+- `figures/ablation/fig2_saturated_throughput_size.png`
+- `figures/ablation/fig3_cpu_latency_pareto.png`
+- `figures/ablation/fig4_syscalls_per_msg.png`
+- `figures/ablation/fig5_e2e_latency.png`
+- `figures/ablation/fig_supp_wakeup_heatmap.png`
 
----
+## Current controlled findings
 
-## Empirical Findings Summary
+- At 64 KiB under saturation, the six primary variants span 13.37--15.75 GiB/s. Interrupt-mode `io_uring` records 13.37 GiB/s.
+- At 1 MiB, the primary variants converge within 8.12--8.65 GiB/s.
+- The separately measured SQPOLL configuration records 6.66 GiB/s at 64 KiB and 4.45 GiB/s at 1 MiB in this single-channel setup.
+- At 64 B in the bursty protocol, futex, eventfd, interrupt-mode `io_uring`, and SQPOLL record median wakeup latencies of 1091.92, 1093.81, 1094.98, and 1058.47 us, respectively.
 
-* **Saturated Streaming Peak**: All variants hit peak streaming throughput at **64 KiB payload size**, achieving **27.88 GiB/s** (`busy_poll`), **27.75 GiB/s** (`io_uring`), **27.52 GiB/s** (`spin_backoff`), and **27.10 GiB/s** (`adaptive`).
-* **Slot Recycling Bottleneck**: At **1 MiB**, throughput scales down to **~9.2 – 9.7 GiB/s** across all variants due to ring buffer slot capacity limits (64 slots).
-* **Wakeup Overhead in Bursty Regime**: Under intermittent traffic (`bursty` regime), spinning mechanisms (`busy_poll`, `spin_backoff`) maintain sub-microsecond latency (<0.13 µs at 64 B) by burning 100% CPU, while sleeping mechanisms (`futex`, `eventfd`, `io_uring`) consume **0% idle CPU** with ~1.0–1.1 ms core wake-up response times under frequency-scaling power states.
+These numbers are protocol-level measurements, not isolated primitive syscall costs. Use the root `data/` files and `report.tex` as the source of truth; do not substitute legacy standalone transport results.
