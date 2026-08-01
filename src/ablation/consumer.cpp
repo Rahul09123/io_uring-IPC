@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
@@ -267,8 +268,8 @@ int main(int argc, char* argv[]) {
         }
         if (io_uring_queue_init(256, &ring, flags) < 0) {
             if (flags & IORING_SETUP_SQPOLL) {
-                std::perror("SQPOLL mode failed (requires CAP_SYS_ADMIN), falling back to interrupt mode");
-                io_uring_queue_init(256, &ring, 0);
+                std::perror("SQPOLL mode failed (requires CAP_SYS_ADMIN)");
+                return 1;
             } else {
                 std::perror("io_uring_queue_init"); return 1;
             }
@@ -284,10 +285,12 @@ int main(int argc, char* argv[]) {
 
     auto* tel = new Telemetry{};
 
-    std::cout << "[Consumer:" << VARIANT_NAMES[variant] << "] Ready\n";
+    const char* output_variant = (variant == IO_URING && std::getenv("USE_SQPOLL"))
+        ? "io_uring_sqpoll" : VARIANT_NAMES[variant];
+    std::cout << "[Consumer:" << output_variant << "] Ready\n";
 
     for (size_t sz : MESSAGE_SIZES) {
-        std::cout << "\n=== " << VARIANT_NAMES[variant]
+        std::cout << "\n=== " << output_variant
                   << " | size=" << sz << " ===\n";
 
         for (int run = 0; run <= NUM_RUNS; ++run) {
@@ -303,7 +306,7 @@ int main(int argc, char* argv[]) {
                 // wakeup_variant,regime,message_size_bytes,run,...
                 // regime is written by the orchestrator (run_ablation.sh merges)
                 // here we embed the variant name only; regime comes from producer args
-                csv << VARIANT_NAMES[variant] << ",unknown," << sz << "," << run
+                csv << output_variant << ",unknown," << sz << "," << run
                     << "," << s.throughput_gbps
                     << "," << s.avg_us
                     << "," << s.stddev_us
@@ -334,7 +337,7 @@ int main(int argc, char* argv[]) {
     close(shm_fd);
     shm_unlink(SHM_RING_NAME);
 
-    std::cout << "[Consumer:" << VARIANT_NAMES[variant] << "] Done. CSV: "
+    std::cout << "[Consumer:" << output_variant << "] Done. CSV: "
               << csv_path << "\n";
     return 0;
 }

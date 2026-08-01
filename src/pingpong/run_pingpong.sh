@@ -4,6 +4,7 @@
 # Usage:
 #   bash run_pingpong.sh                        # full sweep
 #   bash run_pingpong.sh --dry-run              # compile only
+#   bash run_pingpong.sh --require-fixed-frequency
 #   bash run_pingpong.sh --ipc pipe             # single IPC type
 #   bash run_pingpong.sh --ipc shm_ablation \
 #                        --variant futex \
@@ -27,6 +28,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 DATA_DIR="$REPO_ROOT/data"
 FIGURES_DIR="$REPO_ROOT/figures/pingpong"
+source "$SCRIPT_DIR/../benchmark_env.sh"
 
 ALL_IPCS=(pipe unix_socket shm_io_uring posix_mq shm_ablation)
 ALL_VARIANTS=(0 1 2 3 4 5)  # variant integers for pp_ablation (0=busy_poll, 1=spin_backoff, 2=adaptive, 3=futex, 4=eventfd, 5=io_uring)
@@ -35,11 +37,13 @@ VARIANT_NAMES=(busy_poll spin_backoff adaptive futex eventfd io_uring)
 SELECTED_IPCS=()
 SELECTED_VARIANTS=()
 DRY_RUN=0
+REQUIRE_FIXED_FREQUENCY=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run)  DRY_RUN=1;               shift;;
+        --require-fixed-frequency) REQUIRE_FIXED_FREQUENCY=1; shift;;
         --ipc)      SELECTED_IPCS+=("$2");   shift 2;;
         --variant)  SELECTED_VARIANTS+=("$2"); shift 2;;
         *) echo "Unknown option: $1"; exit 1;;
@@ -53,6 +57,7 @@ if [[ ${#SELECTED_VARIANTS[@]} -eq 0 ]]; then SELECTED_VARIANTS=("${VARIANT_NAME
 echo "================================================"
 echo "  Step 0: Environment checks"
 echo "================================================"
+benchmark_capture_environment "$DATA_DIR/environment_pingpong.txt" "$REQUIRE_FIXED_FREQUENCY"
 if command -v cpupower &>/dev/null; then
     GOV=$(cpupower frequency-info -p 2>/dev/null | grep -oP '"\K[^"]+(?=")' | tail -1 || true)
     if [[ "$GOV" != "performance" ]]; then

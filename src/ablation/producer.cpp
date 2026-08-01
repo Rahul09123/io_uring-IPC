@@ -12,6 +12,7 @@
 #include "wakeup.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
@@ -199,8 +200,8 @@ int main(int argc, char* argv[]) {
         }
         if (io_uring_queue_init(64, &ring, flags) < 0) {
             if (flags & IORING_SETUP_SQPOLL) {
-                std::perror("SQPOLL mode failed (requires CAP_SYS_ADMIN), falling back to interrupt mode");
-                io_uring_queue_init(64, &ring, 0);
+                std::perror("SQPOLL mode failed (requires CAP_SYS_ADMIN)");
+                return 1;
             } else {
                 std::perror("io_uring_queue_init"); return 1;
             }

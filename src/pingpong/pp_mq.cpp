@@ -115,9 +115,11 @@ int main() {
         if (mq_fwd == (mqd_t)-1 || mq_bwd == (mqd_t)-1) {
             std::perror("mq_open create");
             // POSIX MQ max message size may be limited by /proc/sys/fs/mqueue/msgsize_max
-            std::cerr << "  HINT: sudo sysctl -w fs.mqueue.msgsize_max="
-                      << (sz * 2) << "\n";
-            write_summary_row(summary, "posix_mq", "n/a", sz, PPStats{});
+            std::cerr << "  UNSUPPORTED: message size " << sz
+                      << " B exceeds this host's POSIX-MQ limit. Configure "
+                      << "fs.mqueue.msgsize_max>=" << sz
+                      << " and re-run, or report this cell as N/A.\n";
+            write_summary_row(summary, "posix_mq", "n/a", sz, PPStats{}, "unsupported");
             continue;
         }
 

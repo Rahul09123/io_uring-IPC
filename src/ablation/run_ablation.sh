@@ -4,6 +4,8 @@
 # Usage:
 #   bash run_ablation.sh                      # full sweep
 #   bash run_ablation.sh --dry-run            # compile only
+#   bash run_ablation.sh --require-fixed-frequency
+#   bash run_ablation.sh --variant io_uring --sqpoll
 #   bash run_ablation.sh --variant futex \
 #                        --variant io_uring \ # subset of variants
 #                        --regime saturated \ # subset of regimes
@@ -20,6 +22,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 DATA_DIR="$REPO_ROOT/data"
 FIGURES_DIR="$REPO_ROOT/figures/ablation"
+source "$SCRIPT_DIR/../benchmark_env.sh"
 
 ALL_VARIANTS=(busy_poll spin_backoff adaptive futex eventfd io_uring)
 ALL_REGIMES=(saturated bursty offered_25 offered_50 offered_75 offered_90)
@@ -28,12 +31,16 @@ SELECTED_VARIANTS=()
 SELECTED_REGIMES=()
 DRY_RUN=0
 USE_PERF=0
+REQUIRE_FIXED_FREQUENCY=0
+USE_SQPOLL=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run)     DRY_RUN=1;           shift;;
         --perf)        USE_PERF=1;          shift;;
+        --require-fixed-frequency) REQUIRE_FIXED_FREQUENCY=1; shift;;
+        --sqpoll)      USE_SQPOLL=1;         shift;;
         --variant)     SELECTED_VARIANTS+=("$2"); shift 2;;
         --regime)      SELECTED_REGIMES+=("$2");  shift 2;;
         *) echo "Unknown option: $1"; exit 1;;
@@ -44,6 +51,13 @@ VARIANTS=("${SELECTED_VARIANTS[@]:-${ALL_VARIANTS[@]}}")
 REGIMES=("${SELECTED_REGIMES[@]:-${ALL_REGIMES[@]}}")
 if [[ ${#SELECTED_VARIANTS[@]} -eq 0 ]]; then VARIANTS=("${ALL_VARIANTS[@]}"); fi
 if [[ ${#SELECTED_REGIMES[@]} -eq 0 ]];  then REGIMES=("${ALL_REGIMES[@]}");  fi
+
+if [[ $USE_SQPOLL -eq 1 ]]; then
+    if [[ ${#VARIANTS[@]} -ne 1 || "${VARIANTS[0]}" != "io_uring" ]]; then
+        echo "ERROR: --sqpoll requires exactly '--variant io_uring'." >&2; exit 2
+    fi
+    export USE_SQPOLL=1
+fi
 
 # ── Variant name → integer ────────────────────────────────────────────────────
 variant_to_int() {
@@ -63,6 +77,7 @@ echo "================================================"
 echo "  Step 1: Compiling ablation binaries"
 echo "================================================"
 mkdir -p "$BUILD_DIR" "$DATA_DIR" "$FIGURES_DIR"
+benchmark_capture_environment "$DATA_DIR/environment_ablation.txt" "$REQUIRE_FIXED_FREQUENCY"
 
 CXX=${CXX:-g++}
 CXXFLAGS="-O3 -std=c++17 -march=native -pthread -Wall -Wextra"
@@ -98,9 +113,11 @@ PERF_OUTPUT="$DATA_DIR/ablation_perf_stat.txt"
 for v in "${VARIANTS[@]}"; do
     V_INT=$(variant_to_int "$v")
     for r in "${REGIMES[@]}"; do
-        CSV_OUT="$DATA_DIR/ablation_${v}_${r}.csv"
+        output_variant="$v"
+        [[ $USE_SQPOLL -eq 1 ]] && output_variant="io_uring_sqpoll"
+        CSV_OUT="$DATA_DIR/ablation_${output_variant}_${r}.csv"
         echo ""
-        echo "── ${v} / ${r} ────────────────────────────────────"
+        echo "── ${output_variant} / ${r} ────────────────────────────────────"
 
         # Clean up stale IPC objects
         rm -f /tmp/ablation_sig_fifo /tmp/ablation_consumer_pid /dev/shm/ipc_ablation_ring 2>/dev/null || true

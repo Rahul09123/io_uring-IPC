@@ -60,6 +60,6 @@ constexpr char PP_RAW_CSV_HEADER[] =
 // Summary output (one row per size)
 constexpr char PP_SUMMARY_CSV_HEADER[] =
     "ipc_type,wakeup_variant,message_size_bytes,n_rounds,"
-    "mean_us,median_us,p90_us,p99_us,p999_us,ci95_lo_us,ci95_hi_us\n";
+    "mean_us,median_us,p90_us,p99_us,p999_us,ci95_lo_us,ci95_hi_us,status\n";
 
 #endif // PINGPONG_COMMON_H

@@ -90,7 +90,8 @@ static inline void write_summary_row(std::ostream& out,
                                      const std::string& ipc_type,
                                      const std::string& wakeup_variant,
                                      size_t msg_sz,
-                                     const PPStats& s) {
+                                     const PPStats& s,
+                                     const std::string& status = "ok") {
     out << ipc_type << ","
         << wakeup_variant << ","
         << msg_sz << ","
@@ -101,7 +102,8 @@ static inline void write_summary_row(std::ostream& out,
         << s.p99_us    << ","
         << s.p999_us   << ","
         << s.ci95_lo_us << ","
-        << s.ci95_hi_us << "\n";
+        << s.ci95_hi_us << ","
+        << status << "\n";
 }
 
 #endif // PINGPONG_STATS_UTIL_H
