@@ -799,6 +799,15 @@ interrupt-mode \texttt{io\_uring}; at 90\% offered load the values were
 106.9 and 103.7\,$\mu$s, respectively.  SQPOLL does not provide a material
 wakeup-latency improvement in this single-channel workload.  Its complete
 64\,B comparison is included in Tables~\ref{tab:bursty} and~\ref{tab:offeredload}.
+The apparently discordant 5.130\,$\mu$s SQPOLL E2E P50 in
+Table~\ref{tab:bursty} is not a 25$\times$ wakeup result: wakeup P50 times the
+empty-ring wait beginning before the next burst and therefore includes the
+intentional 1\,ms inter-burst gap, whereas E2E P50 starts at each message's
+\texttt{slot.send\_ns} publication timestamp and is calculated over all
+messages.  The low SQPOLL E2E median consequently shows that most SQPOLL
+messages incurred little within-burst queue residence; because this suite does
+not trace SQ-thread service order or per-burst scheduler alignment, we do not
+attribute the disparity to an intrinsic SQPOLL wakeup advantage.
 
 \begin{table}[!t]
   \centering
