@@ -153,6 +153,40 @@ def fig2_throughput_regime(rows, outdir):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Figure 2b — Controlled saturated-throughput size sweep
+# ─────────────────────────────────────────────────────────────────────────────
+def fig2b_saturated_throughput_size(rows, outdir):
+    saturated = [r for r in rows if r.get("regime") == "saturated"]
+    grouped = group_by(saturated, "wakeup_variant", "message_size_bytes")
+    sizes = sorted({int(r["message_size_bytes"]) for r in saturated
+                    if r.get("message_size_bytes")})
+
+    fig, ax = plt.subplots(figsize=(9, 5.4))
+    for vname, vlabel in zip(VARIANT_ORDER, VARIANT_LABELS):
+        means = []
+        for size in sizes:
+            samples = grouped.get((vname, str(size)), [])
+            means.append(np.mean([safe_float(r, "throughput_gbps")
+                                  for r in samples]) if samples else np.nan)
+        ax.plot(sizes, means, marker="o", markersize=4.5,
+                label=vlabel, color=V_COLOR[vname], alpha=0.95)
+
+    ax.set_xscale("log", base=2)
+    ax.set_xlabel("Message Size (bytes)")
+    ax.set_ylabel("Mean Throughput (GiB/s)")
+    ax.set_xticks(sizes)
+    ax.set_xticklabels([str(s) for s in sizes], rotation=30, ha="right")
+    ax.grid(True)
+    ax.legend(fontsize=8, ncol=2)
+    plt.tight_layout()
+
+    outpath = os.path.join(outdir, "fig2_saturated_throughput_size.png")
+    plt.savefig(outpath, bbox_inches="tight")
+    plt.close()
+    print(f"  ✓ {outpath}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Figure 3 — CPU Cost vs Latency Pareto
 # ─────────────────────────────────────────────────────────────────────────────
 def fig3_cpu_latency_pareto(rows, outdir):
@@ -375,6 +409,7 @@ def main():
     print("\nGenerating figures:")
     fig1_wakeup_latency(rows, args.output)
     fig2_throughput_regime(rows, args.output)
+    fig2b_saturated_throughput_size(rows, args.output)
     fig3_cpu_latency_pareto(rows, args.output)
     fig4_syscalls(perf_data, rows, args.output)
     fig5_e2e_latency(rows, args.output)

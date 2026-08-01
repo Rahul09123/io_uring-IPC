@@ -141,7 +141,9 @@ round-trips per configuration.
 Our results show that the shared-memory ring delivers the primary performance
 gains. Spinning variants achieve median single-trip latencies of
 345--381\,ns at 64\,B---over a 15$\times$ improvement over pipe or
-socket---and peak direct-ring streaming throughput of 28.17\,GiB/s at 64\,KiB.
+socket. In the controlled saturated ablation, throughput peaks at
+15.75\,GiB/s at 64\,KiB, while interrupt-mode io\_uring reaches
+13.37\,GiB/s.
 In depth-1 ping-pong tests (Suite 2), io\_uring incurs a modest per-event
 ring submission overhead (+3.15\,$\mu$s over futex at 64\,B).
 However, under bursty wakeup conditions (Suite 1), where wakeups occur when the
@@ -644,8 +646,8 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
     \texttt{shm (busy\_poll)} & 267.243          & 276.180 & 285.295 & 295.643 & 269.615 $\pm$ 0.205 \\
     \texttt{shm (spin\_back)} & 267.366          & 276.029 & 285.168 & 297.980 & 269.596 $\pm$ 0.203 \\
     \texttt{shm (eventfd)}    & 276.786          & 283.946 & 297.494 & 327.397 & 278.874 $\pm$ 0.316 \\
-    \texttt{shm (adaptive)}   & 278.976          & 288.360 & 300.819 & 314.115 & 282.830 $\pm$ 2.696 \\
     \texttt{shm (futex)}      & 278.034          & 286.596 & 296.704 & 335.171 & 280.502 $\pm$ 0.236 \\
+    \texttt{shm (adaptive)}   & 278.976          & 288.360 & 300.819 & 314.115 & 282.830 $\pm$ 2.696 \\
     \texttt{shm (io\_uring)}  & 281.154          & 289.455 & 301.202 & 335.805 & 283.185 $\pm$ 0.256 \\
     \texttt{pipe}             & 473.293          & 482.965 & 542.826 & 1429.330 & 479.538 $\pm$ 3.410 \\
     \texttt{posix\_mq}        & N/A              & N/A     & N/A     & N/A     & N/A \\
@@ -707,6 +709,8 @@ visualises the full size sweep.
     \texttt{eventfd}       & 0.262 & 9.54 & 13.74 & 8.37 \\
     \texttt{futex}         & 0.300 & \textbf{10.68} & 15.60 & 8.18 \\
     \texttt{io\_uring}     & 0.332 & 9.92 & 13.37 & 8.12 \\
+    \midrule
+    \texttt{uring (SQPOLL)} & 0.109 & 4.22 & 6.66 & 4.45 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -720,10 +724,10 @@ Under fully saturated load the ring rarely empties, so the wakeup primitive is
 rarely invoked.  The six variants remain in the same order of magnitude, with
 the refreshed 64\,KiB results spanning 13.37--15.75\,GiB/s.
 
-\textbf{(2) Direct-ring baseline remains faster than the pipe baseline.}
-The separately measured direct SHM+io\_uring baseline reaches 28.17\,GiB/s at
-64\,KiB, versus 5.07\,GiB/s for POSIX pipe.  This result is consistent with
-avoiding a kernel-mediated payload copy on the shared-memory data path.
+\textbf{(2) The controlled io\_uring result is 13.37\,GiB/s at 64\,KiB.}
+This value, rather than the repository's older 28.17\,GiB/s direct-harness
+result, is used for the paper's throughput conclusions.  Section~\ref{sec:provenance}
+explains why the two harnesses cannot be combined.
 
 \textbf{(3) Large messages converge.}
 At 1\,MiB the six refreshed variants span 8.12--8.65\,GiB/s.  Payload copying
@@ -733,6 +737,12 @@ and the fixed 64-slot ring dominate the wakeup mechanism at this size.
 At 64\,B payload, the refreshed variants span 0.262--0.344\,GiB/s.  This
 variation reflects fixed per-message coordination overhead. At 4\,KiB and
 above, payload copying dominates the observed throughput range.
+
+\textbf{(5) SQPOLL is reported separately.}
+The single-channel SQPOLL configuration is slower throughout this saturated
+sweep (0.109--6.66\,GiB/s over the reported sizes).  This configuration-level
+result does not establish a general SQPOLL throughput limit; batching and
+poll-thread affinity remain outside the experiment.
 
 \subsection{Bursty Regime: Pure Wakeup Latency Ablation (Suite 1)}
 
@@ -756,6 +766,8 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
     \texttt{futex}         & 126.357\,$\mu$s & 1091.92\,$\mu$s       & 0.546 \\
     \texttt{eventfd}       & 126.277\,$\mu$s & 1093.81\,$\mu$s       & 0.570 \\
     \texttt{io\_uring}     & 126.658\,$\mu$s & 1094.98\,$\mu$s       & 0.680 \\
+    \midrule
+    \texttt{uring (SQPOLL)} & 5.130\,$\mu$s & 1058.47\,$\mu$s       & 0.218 \\
     \bottomrule
   \end{tabular}}
 \end{table}
@@ -766,7 +778,7 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
   \caption{Bursty-Regime Wakeup Latency Across Six SHM Variants.  Spinning
     variants maintain near-zero wakeup latency while continuously spinning.
     Kernel-sleeping variants (\texttt{futex}, \texttt{eventfd},
-    \texttt{io\_uring}) remain close at roughly 1.03--1.10\,ms in the
+    \texttt{io\_uring}) remain close at 1.092--1.095\,ms in the
     frequency-pinned replication.}
   \label{fig:wakeup_lat}
 \end{figure*}
@@ -784,7 +796,8 @@ decisive advantage for a single SPSC sleeping wakeup on this platform.
 At 64\,B its bursty wakeup P50 was 1058.5\,$\mu$s, versus 1095.0\,$\mu$s for
 interrupt-mode \texttt{io\_uring}; at 90\% offered load the values were
 106.9 and 103.7\,$\mu$s, respectively.  SQPOLL does not provide a material
-wakeup-latency improvement in this single-channel workload.
+wakeup-latency improvement in this single-channel workload.  Its complete
+64\,B comparison is included in Tables~\ref{tab:bursty} and~\ref{tab:offeredload}.
 
 \begin{table}[!t]
   \centering
@@ -801,6 +814,8 @@ wakeup-latency improvement in this single-channel workload.
     \texttt{futex}         & 1433.7 & 669.9  & 254.3  & 103.2  & 0.26  \\
     \texttt{eventfd}       & 1433.0 & 670.1  & 253.1  & 103.3  & 0.28  \\
     \texttt{io\_uring}     & 1441.0 & 678.3  & 254.7  & 103.7  & 0.93  \\
+    \midrule
+    \texttt{uring (SQPOLL)} & 1258.4 & 658.3 & 257.6 & 106.9 & 3.97 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -819,6 +834,9 @@ reduce opportunities for deep idle and scheduler descheduling.
 At saturation, \texttt{io\_uring}'s higher latency (0.93\,$\mu$s)
 compared to \texttt{futex}/\texttt{eventfd} (0.26--0.28\,$\mu$s) reflects the constant overhead of
 SQE/CQE ring management on the non-blocking fast path.
+SQPOLL follows the same load-dependent trend (1258.4 to 106.9\,$\mu$s from
+25\% to 90\%) but records 3.97\,$\mu$s at saturation, so it is not a
+zero-overhead replacement in this configuration.
 \texttt{adaptive} hybrid spinning captures the best of both worlds,
 reducing low-load sleep penalties while achieving pure spinning
 performance (0.09\,$\mu$s) under saturation.
@@ -843,24 +861,31 @@ separate experimental protocols probing the same underlying C-state
 ramp-up effect from different angles, not as repeated measurements of the
 same condition.
 
-\subsection{IPC Throughput vs.\ Kernel-Mediated Baselines}
+\subsection{Controlled Throughput Provenance}
+\label{sec:provenance}
 
-To contextualise the performance of our lock-free SPSC shared-memory ring, we benchmarked
-it against standard Linux kernel-mediated IPC mechanisms across a payload size sweep from
-64\,B to 1\,MiB under saturated conditions.
-
-Figure~\ref{fig:throughput} compares the direct transport baselines. The
-SHM+io\_uring ring reaches 28.17\,GiB/s at 64\,KiB, versus 5.07\,GiB/s for
-POSIX pipe. At 1\,MiB, UNIX socket (11.10\,GiB/s) and POSIX MQ
-(10.87\,GiB/s) exceed the direct SHM+io\_uring baseline (9.70\,GiB/s).
+The repository retains two throughput-data families.  The legacy direct
+transport harness uses a fixed 2\,GiB transfer per size and separate transport
+source trees; its \texttt{io\_uring\_results.csv} records 28.17\,GiB/s at
+64\,KiB.  The controlled ablation uses the bit-identical ring, size-scaled
+16/128/512\,MiB runs, and additional wakeup telemetry; it records
+13.37\,GiB/s for interrupt-mode \texttt{io\_uring} at the same size.  The
+legacy CSV predates the fixed-frequency environment records, so the observed
+2.1$\times$ difference cannot be assigned to a wakeup mechanism or to one
+harness feature.  Consequently, the final throughput conclusions and
+Figure~\ref{fig:throughput} use only the refreshed controlled ablation.  The
+legacy direct CSVs remain in the artifact for provenance but are not used for
+cross-harness performance claims.  Kernel-mediated transports are compared
+against the ring using the controlled depth-1 latency suite in
+Table~\ref{tab:pingpong}.
 
 \begin{figure}[!t]
   \centering
-  \includegraphics[width=\columnwidth]{figures/throughput.png}
-  \caption{Direct transport throughput (GiB/s) vs.\ message size.  The
-    SHM+io\_uring ring reaches 28.17\,GiB/s at 64\,KiB versus 5.07\,GiB/s
-    for pipe; at 1\,MiB, socket and POSIX MQ exceed the 9.70\,GiB/s SHM
-    baseline.}
+  \includegraphics[width=\columnwidth]{figures/ablation/fig2_saturated_throughput_size.png}
+  \caption{Controlled saturated-throughput sweep for the six bit-identical
+    SHM-ring wakeup variants ($N=15$).  This figure visualises the same data
+    family as Table~\ref{tab:throughput}; SQPOLL is reported separately in
+    that table.}
   \label{fig:throughput}
 \end{figure}
 
@@ -953,10 +978,10 @@ the configuration-level result but do not isolate a single kernel mechanism.
 
 \subsection{Ring-Depth Constraint at 1 MiB}
 
-At 1\,MiB, the direct UNIX Socket (11.10\,GiB/s) and POSIX MQ
-(10.87\,GiB/s) baselines exceed the direct SHM+io\_uring baseline
-(9.70\,GiB/s), while the refreshed ablation variants span 8.12--8.65\,GiB/s.
-This behaviour is consistent with the fixed 64-slot ring geometry.
+At 1\,MiB, the refreshed saturated ablation variants span
+8.12--8.65\,GiB/s.  This convergence is consistent with the fixed 64-slot
+ring geometry, although the current experiment does not include a controlled
+ring-depth sweep.
 With each slot sized at
 1\,MiB, the ring holds at most 64\,MiB of in-flight data.  The producer stalls
 as soon as all 64 slots are occupied while the consumer processes each 1\,MiB
@@ -1056,8 +1081,8 @@ we isolated the true contribution of \texttt{io\_uring} to IPC latency.
 \begin{enumerate}
   \item \textbf{The shared-memory data path drives the performance gains.}
         Spinning on a cache-aligned ring delivers 345\,ns P50 at 64\,B.
-        The direct SHM+io\_uring transport baseline reaches 28.17\,GiB/s at
-        64\,KiB, versus 5.07\,GiB/s for pipe.
+        In the controlled saturated ablation, the six primary variants reach
+        13.37--15.75\,GiB/s at 64\,KiB.
 
   \item \textbf{Interrupt-mode wakeup result is deliberately scoped.}
         In strict depth-1 ping-pong, interrupt-mode \texttt{io\_uring} pays a
@@ -1071,7 +1096,7 @@ we isolated the true contribution of \texttt{io\_uring} to IPC latency.
         hot-path latency and gracefully reduces CPU consumption during
         idle periods.
 
-  \item \textbf{The 1\,MiB throughput inversion is consistent with ring depth.}
+  \item \textbf{The 1\,MiB throughput convergence may reflect ring depth.}
         A controlled ring-depth sweep is needed to test whether increasing
         \texttt{NUM\_SLOTS} recovers the throughput advantage.
 
