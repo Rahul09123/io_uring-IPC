@@ -112,10 +112,10 @@
 \begin{abstract}
 Inter-Process Communication (IPC) performance is a foundational bottleneck in
 concurrent, multi-process software systems. Traditional kernel-mediated
-mechanisms---POSIX Pipes, UNIX Domain Sockets, POSIX Message Queues---impose
-mandatory system calls, context switches, and user-to-kernel memory copying on
-every message, creating an irreducible per-message overhead of several
-microseconds. Modern high-performance systems reduce this cost by employing
+mechanisms---POSIX Pipes, UNIX Domain Sockets, and POSIX Message Queues---
+require system calls and kernel-mediated data movement and may incur scheduler
+transitions; in our depth-1 suite, their 64\,B median single-trip latencies are
+5.29--5.57\,$\mu$s. Modern high-performance systems reduce this cost by employing
 lock-free Single-Producer Single-Consumer (SPSC) shared-memory ring buffers
 that transfer payload data entirely in userspace via memcpy into POSIX
 shared memory regions. A critical and largely unanswered question, however,
@@ -136,21 +136,22 @@ receive timestamps are recorded on the single initiator core using
 CLOCK\_MONOTONIC\_RAW, eliminating cross-core TSC drift and
 in-flight pipelining artefacts, reporting full percentile distributions
 (P50, P90, P99, P99.9) using size-scaled samples of 2\,000--100\,000
-round-trips per configuration.
+round-trips per supported configuration.
 
-Our results show that the shared-memory ring delivers the primary performance
-gains. Spinning variants achieve median single-trip latencies of
-345--381\,ns at 64\,B---over a 15$\times$ improvement over pipe or
-socket. In the controlled saturated ablation, throughput peaks at
-15.75\,GiB/s at 64\,KiB, while interrupt-mode io\_uring reaches
-13.37\,GiB/s.
+Our results separate the roles of the data and wakeup paths. At 64\,B,
+adaptive and busy-poll waiting achieve median single-trip latencies of
+0.345 and 0.381\,$\mu$s, respectively; the pipe and socket medians are
+13.9--15.9$\times$ higher. In the controlled saturated ablation, the six
+primary variants span 13.37--15.75\,GiB/s at 64\,KiB, with interrupt-mode
+io\_uring at 13.37\,GiB/s.
 In depth-1 ping-pong tests (Suite 2), io\_uring incurs a modest per-event
 ring submission overhead (+3.15\,$\mu$s over futex at 64\,B).
 However, under bursty wakeup conditions (Suite 1), where wakeups occur when the
 ring empties, io\_uring performs on par with futex and
-eventfd ($\approx$1.09--1.10\,ms median wakeup latency).
-The shared-memory ring, rather than the wakeup primitive, delivers the primary
-gain.  A frequency-pinned replication (\texttt{performance} governor and
+eventfd (1.092--1.095\,ms median wakeup latency).
+Thus, the shared-memory data path dominates saturated throughput, whereas the
+wait strategy dominates empty-ring latency and CPU cost. A frequency-pinned
+replication (\texttt{performance} governor and
 \texttt{no\_turbo=1}) reproduces the close ordering of the kernel-sleeping
 variants.  We additionally evaluate SQPOLL as a separate configuration:
 its 64\,B bursty wakeup median (1058.5\,$\mu$s) is close to interrupt-mode
