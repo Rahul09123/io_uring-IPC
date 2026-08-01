@@ -1,0 +1,8 @@
+timestamp_utc=2026-08-01T07:57:17Z
+hostname=aayanksinghai-Vivobook-ASUSLaptop-K3605ZF-K3605ZF
+kernel=Linux 6.17.0-35-generic x86_64 GNU/Linux
+cpu_model=
+benchmark_cores=1 2
+governor=cpu1=performance cpu2=performance 
+turbo=intel_pstate.no_turbo=1
+require_fixed_frequency=1
