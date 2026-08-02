@@ -1,0 +1,9 @@
+ipc_type,wakeup_variant,message_size_bytes,n_rounds,mean_us,median_us,p90_us,p99_us,p999_us,ci95_lo_us,ci95_hi_us,status
+shm_io_uring_sqpoll,io_uring_sqpoll,64,100000,55.3169,28.079,28.79,1283.53,3309.63,53.6961,56.9377,ok
+shm_io_uring_sqpoll,io_uring_sqpoll,256,100000,54.0359,27.834,28.903,892.824,3260.08,52.6535,55.4183,ok
+shm_io_uring_sqpoll,io_uring_sqpoll,1024,100000,57.4727,29.051,29.724,1496.33,3377.69,55.8251,59.1203,ok
+shm_io_uring_sqpoll,io_uring_sqpoll,4096,50000,61.7122,31.298,32.0531,1700.29,3353.34,59.3063,64.1181,ok
+shm_io_uring_sqpoll,io_uring_sqpoll,16384,20000,78.9698,40.237,40.9752,2202.66,3453.51,74.6333,83.3063,ok
+shm_io_uring_sqpoll,io_uring_sqpoll,65536,10000,116.195,59.188,61.1542,2713.71,3497.24,108.81,123.581,ok
+shm_io_uring_sqpoll,io_uring_sqpoll,262144,5000,279.147,143.353,152.233,2924.15,3640.72,264.67,293.625,ok
+shm_io_uring_sqpoll,io_uring_sqpoll,1048576,2000,1132.96,620.232,2840.71,3721.52,4087.68,1090.54,1175.39,ok

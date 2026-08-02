@@ -34,7 +34,9 @@ benchmark_capture_environment() {
         echo "timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "hostname=$(hostname)"
         echo "kernel=$(uname -srmo)"
-        echo "cpu_model=$(lscpu 2>/dev/null | awk -F: '/Model name/ {sub(/^[[:space:]]+/, \"\", $2); print $2; exit}')"
+        local cpu_model
+	cpu_model="$(lscpu 2>/dev/null | awk -F: '/Model name/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')"
+	echo "cpu_model=$cpu_model"
         echo "benchmark_cores=$cores"
         echo "governor=$governor"
         echo "turbo=$turbo"
