@@ -15,14 +15,15 @@ All final claims are taken from the root `data/` CSV files and the current paper
 
 | Transport / wakeup | P50 (us) |
 |---|---:|
-| SHM adaptive | 0.345 |
-| SHM busy poll | 0.381 |
-| SHM futex | 5.001 |
-| SHM eventfd | 5.039 |
-| Pipe | 5.290 |
-| UNIX socket | 5.496 |
-| POSIX MQ | 5.567 |
-| SHM interrupt-mode `io_uring` | 8.150 |
+| SHM busy poll | 0.185 |
+| SHM adaptive | 0.211 |
+| SHM futex | 2.562 |
+| SHM eventfd | 2.602 |
+| Pipe | 2.710 |
+| UNIX socket | 2.770 |
+| POSIX MQ | 2.861 |
+| SHM interrupt-mode `io_uring` | 4.173 |
+| SHM `io_uring` SQPOLL-assisted signaling | 6.912 |
 
 The protocol has queue depth one. The initiator records both timestamps on CPU 1 with `CLOCK_MONOTONIC_RAW`, and single-trip latency is RTT/2.
 
@@ -47,7 +48,7 @@ The bursty and offered-load runs were collected with the benchmark processes pin
 - `data/environment_ablation.txt`
 - `data/environment_pingpong.txt`
 
-At 64 B in the bursty protocol, median wakeup latency was 1091.92 us for futex, 1093.81 us for eventfd, 1094.98 us for interrupt-mode `io_uring`, and 1058.47 us for SQPOLL. These values include the protocol's idle-gap behavior and must not be interpreted as isolated syscall latency.
+At 64 B in the bursty protocol, the mean run-level wakeup P50 was 1091.92 us for futex, 1093.81 us for eventfd, 1094.98 us for interrupt-mode `io_uring`, and 1058.47 us for SQPOLL. These values include the protocol's idle-gap behavior and must not be interpreted as isolated syscall latency.
 
 ## Experimental suites
 
@@ -79,7 +80,7 @@ Measured rounds are size-scaled:
 | 256 KiB | 5,000 |
 | 1 MiB | 2,000 |
 
-POSIX MQ has canonical results through 64 KiB. Its 1 MiB result is `N/A` because that run was not supported by the configured kernel message-size limit; the report preserves `N/A` rather than estimating a value.
+POSIX MQ has canonical results through 4 KiB. The 16 KiB and larger configurations are `unsupported` under the recorded kernel message-size limit; the report preserves `N/A` rather than estimating values.
 
 ## Requirements
 

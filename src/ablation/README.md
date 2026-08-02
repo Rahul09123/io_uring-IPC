@@ -13,7 +13,7 @@ The six primary variants are compiled from the same producer, consumer, and ring
 | `adaptive` | Bounded spin followed by futex sleep/wake |
 | `futex` | `FUTEX_WAIT` / `FUTEX_WAKE` |
 | `eventfd` | `poll`/`read` and `write` on eventfd |
-| `io_uring` | FIFO read/write submitted through interrupt-mode `io_uring` |
+| `io_uring` | 10 ms FIFO `poll()` gate, then read/write through interrupt-mode `io_uring` |
 
 `io_uring` can also be run with `IORING_SETUP_SQPOLL` by setting `USE_SQPOLL=1`; the runner exposes this as `--sqpoll`. SQPOLL output is labelled `io_uring_sqpoll` and must be analysed separately from the six primary variants.
 
@@ -83,6 +83,6 @@ Optional `--perf` runs the consumer under `perf stat` and records selected sysca
 - At 64 KiB under saturation, the six primary variants span 13.37--15.75 GiB/s. Interrupt-mode `io_uring` records 13.37 GiB/s.
 - At 1 MiB, the primary variants converge within 8.12--8.65 GiB/s.
 - The separately measured SQPOLL configuration records 6.66 GiB/s at 64 KiB and 4.45 GiB/s at 1 MiB in this single-channel setup.
-- At 64 B in the bursty protocol, futex, eventfd, interrupt-mode `io_uring`, and SQPOLL record median wakeup latencies of 1091.92, 1093.81, 1094.98, and 1058.47 us, respectively.
+- At 64 B in the bursty protocol, futex, eventfd, interrupt-mode `io_uring`, and SQPOLL record mean run-level wakeup P50 values of 1091.92, 1093.81, 1094.98, and 1058.47 us, respectively.
 
 These numbers are protocol-level measurements, not isolated primitive syscall costs. Use the root `data/` files and `report.tex` as the source of truth; do not substitute legacy standalone transport results.

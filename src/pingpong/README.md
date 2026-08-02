@@ -49,8 +49,9 @@ The counts are deliberately size-scaled to keep execution time manageable while 
 
 The MQ implementation creates queues with `mq_msgsize` equal to the current payload size. Kernel limits can reject larger sizes. In the canonical repository data:
 
-- 64 KiB completed with 10,000 rounds.
-- 1 MiB is `N/A` and must remain explicitly unavailable.
+- 4 KiB completed with 50,000 rounds.
+- The 16 KiB and larger rows are `unsupported` and must remain explicitly
+  unavailable in the report.
 
 Changing `fs.mqueue.msgsize_max` permits a new run but does not retroactively create a valid result. Record the new environment and rerun the suite before replacing `N/A`.
 

@@ -78,7 +78,7 @@
 % ─────────────────────────────────────────────────────────────────────────────
 \begin{document}
 
-\title{Shared-Memory SPSC IPC: A Controlled Study of Wakeup Mechanisms and io\_uring Modes}
+\title{Shared-Memory SPSC IPC: A Controlled Study of Wakeup Mechanisms and SQPOLL-Assisted Signaling}
 
 \author{
   \makebox[0.98\textwidth][c]{%
@@ -115,7 +115,7 @@ concurrent, multi-process software systems. Traditional kernel-mediated
 mechanisms---POSIX Pipes, UNIX Domain Sockets, and POSIX Message Queues---
 require system calls and kernel-mediated data movement and may incur scheduler
 transitions; in our depth-1 suite, their 64\,B median single-trip latencies are
-5.29--5.57\,$\mu$s. Modern high-performance systems reduce this cost by employing
+2.71--2.86\,$\mu$s. Modern high-performance systems reduce this cost by employing
 lock-free Single-Producer Single-Consumer (SPSC) shared-memory ring buffers
 that transfer payload data entirely in userspace via memcpy into POSIX
 shared memory regions. A critical and largely unanswered question, however,
@@ -140,12 +140,12 @@ round-trips per supported configuration.
 
 Our results separate the roles of the data and wakeup paths. At 64\,B,
 adaptive and busy-poll waiting achieve median single-trip latencies of
-0.345 and 0.381\,$\mu$s, respectively; the pipe and socket medians are
-13.9--15.9$\times$ higher. In the controlled saturated ablation, the six
+0.211 and 0.185\,$\mu$s, respectively; the pipe and socket medians are
+12.8--15.0$\times$ higher. In the controlled saturated ablation, the six
 primary variants span 13.37--15.75\,GiB/s at 64\,KiB, with interrupt-mode
 io\_uring at 13.37\,GiB/s.
 In depth-1 ping-pong tests (Suite 2), io\_uring incurs a modest per-event
-ring submission overhead (+3.15\,$\mu$s over futex at 64\,B).
+ring submission overhead (+1.61\,$\mu$s over futex at 64\,B).
 However, under bursty wakeup conditions (Suite 1), where wakeups occur when the
 ring empties, io\_uring performs on par with futex and
 eventfd (1.092--1.095\,ms median wakeup latency).
@@ -193,7 +193,7 @@ Disruptor~\cite{disruptor} and Intel DPDK~\cite{dpdk}---take shared memory a
 step further by coordinating access using only atomic load/store instructions on
 cache-line-aligned indices, avoiding any kernel involvement on the data path.
 Message delivery in the uncontended case reduces to a \texttt{memcpy} plus two
-atomic index updates; the measured adaptive P50 is 345\,ns at 64\,B, more than
+atomic index updates; the measured adaptive P50 is 211\,ns at 64\,B, more than
 an order of magnitude below the blocking baselines in this experiment.
 
 A remaining challenge is the \emph{empty-ring wakeup problem}: when the ring is
@@ -229,9 +229,11 @@ dimensions on identical hardware with a controlled ablation.
         The 64\,B and 4\,KiB configurations use 100\,000 and 50\,000 rounds,
         respectively.
 
-  \item \textbf{Explicit measurement scope.}  We report interrupt-mode and
-        SQPOLL io\_uring as distinct configurations, and record fixed-frequency
-        settings for the low-load wakeup measurements.
+  \item \textbf{Explicit measurement scope.}  We report interrupt-mode
+        io\_uring separately from the SQPOLL configurations and label the
+        Suite~2 implementation as SQPOLL-assisted signaling because its
+        blocking read/wait rings remain interrupt-mode.  Fixed-frequency
+        settings are recorded for the low-load wakeup measurements.
 
   \item \textbf{Reproducible artifact.}  All source code, raw CSV data, and
         figure-generation scripts are published at
@@ -333,9 +335,10 @@ dedicated kernel poller thread can eliminate submission syscalls; completion
 waiting and host policy still determine whether other kernel entries occur.
 
 In our implementation, \texttt{io\_uring} is used \emph{exclusively for the
-wakeup signaling path}.  When the consumer sleeps, it submits an
-\texttt{IORING\_OP\_READ} on a named FIFO and blocks in
-\texttt{io\_uring\_submit\_and\_wait}.  When the producer detects
+wakeup signaling path}.  In Suite~1, the consumer first applies a 10\,ms
+\texttt{poll()} readiness gate to the named FIFO and then submits an
+\texttt{IORING\_OP\_READ}; the tested wait path is therefore
+\texttt{poll}/\texttt{io\_uring}, not a pure syscall-free wait.  When the producer detects
 \texttt{consumer\_sleeping}~=~1, it submits an \texttt{IORING\_OP\_WRITE} to
 the same FIFO.  The payload data path is pure \texttt{memcpy} into shared
 memory---\texttt{io\_uring} never touches message bytes.
@@ -391,10 +394,10 @@ favourably to 30--34\,\% for the measured pipe and socket baselines.
 \textbf{(2) Sequential consistency at publish boundaries.}
 \texttt{head} is stored with \texttt{memory\-\_order\-\_seq\-\_cst}
 to prevent Store-Load reordering that could cause the producer to read
-stale cleared sleeping flag and skip sending a wakeup,
-silently deadlocking the consumer.  On x86 (TSO), this is equivalent to
-a plain store followed by a \texttt{mfence}; on ARM64 it compiles to a
-\texttt{stlr} (store-release) instruction.
+a stale cleared sleeping flag and skip sending a wakeup,
+silently deadlocking the consumer.  Compilers enforce the required global
+ordering with architecture-specific locked or fenced sequences; the exact
+instruction sequence is compiler- and target-dependent.
 
 \textbf{(3) Lost-wakeup prevention.}  A classic race exists in any
 producer-consumer pair: the consumer checks \texttt{head == tail}
@@ -414,8 +417,8 @@ timestamp and size, then executes a seq\_cst store to \texttt{head};
 observes \texttt{head > tail}, it processes the slot and advances \texttt{tail}
 with a release store; (c)~if the consumer finds the ring empty after its
 deadlock-prevention recheck, it invokes the configured wakeup primitive to
-sleep.  Steps (a) and (b) involve zero system calls; step (c) invokes at most
-one system call per wakeup event.
+sleep.  Steps (a) and (b) involve zero system calls; step (c) invokes the
+kernel calls required by the selected wait path.
 
 \subsection{Pluggable Wakeup Layer: Six Ablation Variants}
 
@@ -430,7 +433,7 @@ the wakeup mechanism.
 \paragraph{1.~\texttt{busy\_poll}.}
 The consumer spins in a tight \texttt{while(head.load(relaxed) == tail)} loop
 with no backoff.  Zero system calls are issued while waiting.  The measured
-64\,B depth-1 P50 is 0.381\,$\mu$s, at the cost of continuously occupying the
+64\,B depth-1 P50 is 0.185\,$\mu$s, at the cost of continuously occupying the
 pinned consumer core.
 
 \paragraph{2.~\texttt{spin\_backoff}.}
@@ -459,9 +462,10 @@ The eventfd is compatible with \texttt{epoll}/\texttt{select}, easing
 integration into existing event-loop frameworks.
 
 \paragraph{6.~\texttt{io\_uring}.}
-The consumer submits an \texttt{IORING\-\_OP\-\_READ} SQE targeting a
-named FIFO (\texttt{/tmp/\allowbreak uring\-\_sig\-\_fifo}) and blocks
-in \texttt{io\-\_uring\-\_submit\-\_and\-\_wait\-(ring,~1)}.  The
+The consumer first calls \texttt{poll()} with a 10\,ms timeout on a named
+FIFO (\texttt{/tmp/\allowbreak uring\-\_sig\-\_fifo}); after readiness, it
+submits an \texttt{IORING\-\_OP\-\_READ} SQE and waits through
+\texttt{io\-\_uring\-\_submit\-\_and\-\_wait\-(ring,~1)}.  The
 producer submits an \texttt{IORING\-\_OP\-\_WRITE} SQE to the same FIFO
 and calls \texttt{io\-\_uring\-\_submit}.  The \texttt{io\-\_uring}
 context can simultaneously monitor additional FDs, making it advantageous
@@ -486,7 +490,7 @@ permits SQPOLL operation.
     \texttt{adaptive}      & Spin-then-futex    & Hybrid          & Futex \\
     \texttt{futex}         & FUTEX\_WAIT        & Sleeping        & Futex \\
     \texttt{eventfd}       & poll+read          & Sleeping        & poll/eventfd \\
-    \texttt{io\_uring}     & submit/wait        & Sleeping        & poll/io\_uring \\
+    \texttt{io\_uring}     & poll+submit/wait   & Sleeping        & poll/io\_uring \\
     \bottomrule
   \end{tabular}}
 \end{table}
@@ -566,15 +570,14 @@ pinned, the \texttt{performance} governor on both cores, and
 \texttt{isolcpus}/\texttt{nohz\_full} was not used; residual scheduler and
 idle-state effects therefore remain a limitation.
 
-\textbf{Supplementary SQPOLL replication.}  The completed Suite~2 SQPOLL
-configuration was run separately on a native Linux host (Linux 6.17.0-23),
-with logical CPUs~1 and~2 pinned,
+\textbf{SQPOLL-assisted signal-mode run.}  The completed Suite~2 SQPOLL
+configuration was run on the reference native Linux host, with logical CPUs~1 and~2 pinned,
 the \texttt{performance} governor, and
 \texttt{intel\_pstate.no\_turbo=1}; its record is
 \texttt{data/environment\_pingpong.txt}.  It establishes that the SQPOLL
-configuration completes under the documented protocol, but its absolute
-latency is not used to rank mechanisms measured on the i5-12500H reference
-host.
+assisted signaling configuration completes under the documented protocol. The
+blocking FIFO read/wait rings remain interrupt-mode to avoid a depth-1 SQPOLL
+deadlock, so this is not a fully syscall-free end-to-end configuration.
 
 \subsection{Statistical Methodology}
 
@@ -615,7 +618,7 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
 
 \begin{table}[!t]
   \centering
-\caption{Single-Trip Ping-Pong Latency Distributions ($\mu$s). Sample counts are 100\,000 (64\,B), 50\,000 (4\,KiB), 10\,000 (64\,KiB), and 2\,000 (1\,MiB). Each row reports P50, P90, P99, P99.9, and mean $\pm$ 95\% CI from the canonical root summary CSVs. Rows marked $^\dagger$ are the supplementary frequency-controlled SQPOLL run on a separate Linux host and are not used for cross-host rankings.}
+\caption{Single-Trip Ping-Pong Latency Distributions ($\mu$s). Sample counts are 100\,000 (64\,B), 50\,000 (4\,KiB), 10\,000 (64\,KiB), and 2\,000 (1\,MiB). Each row reports P50, P90, P99, P99.9, and mean $\pm$ 95\% CI from the canonical root summary CSVs. SQPOLL denotes the separately labelled SQPOLL-assisted signaling configuration.}
   \label{tab:pingpong}
   \resizebox{\columnwidth}{!}{%
   \small
@@ -624,95 +627,93 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
     \textbf{Transport / Variant} & \textbf{P50} & \textbf{P90} & \textbf{P99} & \textbf{P99.9} & \textbf{Mean $\pm$ CI} \\
     \midrule
     \multicolumn{6}{@{}l}{\emph{Message Size: 64\,B --- lower is better}} \\[1pt]
-    \texttt{shm (adaptive)}   & \textbf{0.345} & 0.439 & 0.505 & 1.189 & 0.363 $\pm$ 0.002 \\
-    \texttt{shm (busy\_poll)} & 0.381          & 0.500 & 0.851 & 1.584 & 0.414 $\pm$ 0.003 \\
-    \texttt{shm (spin\_back)} & 0.727          & 1.284 & 1.317 & 1.823 & 0.846 $\pm$ 0.002 \\
-    \texttt{shm (futex)}      & 5.001          & 5.097 & 6.395 & 8.872 & 5.033 $\pm$ 0.002 \\
-    \texttt{shm (eventfd)}    & 5.039          & 5.169 & 6.444 & 8.832 & 5.081 $\pm$ 0.002 \\
-    \texttt{pipe}             & 5.290          & 5.400 & 7.016 & 10.984 & 5.345 $\pm$ 0.005 \\
-    \texttt{posix\_mq}        & 5.567          & 5.685 & 7.361 & 9.824 & 5.629 $\pm$ 0.002 \\
-    \texttt{unix\_socket}     & 5.496          & 7.214 & 8.196 & 11.330 & 5.900 $\pm$ 0.017 \\
-    \texttt{shm (io\_uring)}  & 8.150          & 8.426 & 10.351 & 14.347 & 8.236 $\pm$ 0.003 \\
-    \texttt{shm (io\_uring SQPOLL)}$^\dagger$ & 28.079 & 28.790 & 1283.530 & 3309.630 & 55.317 $\pm$ 1.621 \\
+    \texttt{shm (busy\_poll)} & \textbf{0.185} & 0.227 & 0.235 & 0.502 & 0.191 $\pm$ 0.001 \\
+    \texttt{shm (adaptive)}   & 0.211          & 0.244 & 0.260 & 0.612 & 0.216 $\pm$ 0.001 \\
+    \texttt{shm (spin\_back)} & 0.375          & 0.634 & 0.679 & 1.993 & 0.417 $\pm$ 0.001 \\
+    \texttt{shm (futex)}      & 2.562          & 2.619 & 3.457 & 4.663 & 2.589 $\pm$ 0.002 \\
+    \texttt{shm (eventfd)}    & 2.602          & 3.275 & 4.121 & 5.795 & 2.727 $\pm$ 0.002 \\
+    \texttt{pipe}             & 2.710          & 2.773 & 3.787 & 5.827 & 2.747 $\pm$ 0.002 \\
+    \texttt{posix\_mq}        & 2.861          & 2.920 & 3.864 & 4.936 & 2.901 $\pm$ 0.012 \\
+    \texttt{unix\_socket}     & 2.770          & 4.694 & 5.534 & 7.555 & 3.271 $\pm$ 0.006 \\
+    \texttt{shm (io\_uring)}  & 4.173          & 5.275 & 6.156 & 9.433 & 4.422 $\pm$ 0.004 \\
+    \texttt{shm (io\_uring SQPOLL)} & 6.912 & 7.051 & 9.417 & 1485.060 & 13.816 $\pm$ 0.570 \\
     \midrule
     \multicolumn{6}{@{}l}{\emph{Message Size: 4\,KiB --- lower is better}} \\[1pt]
-    \texttt{shm (adaptive)}   & \textbf{2.263} & 2.339 & 2.422 & 5.072 & 2.271 $\pm$ 0.001 \\
-    \texttt{shm (busy\_poll)} & 2.306          & 2.413 & 3.576 & 8.527 & 2.353 $\pm$ 0.004 \\
-    \texttt{shm (spin\_back)} & 2.669          & 2.740 & 2.947 & 5.474 & 2.662 $\pm$ 0.002 \\
-    \texttt{shm (futex)}      & 6.735          & 6.899 & 8.575 & 10.677 & 6.808 $\pm$ 0.003 \\
-    \texttt{shm (eventfd)}    & 6.809          & 7.137 & 8.403 & 10.874 & 6.898 $\pm$ 0.011 \\
-    \texttt{pipe}             & 7.147          & 7.470 & 8.825 & 12.966 & 7.248 $\pm$ 0.004 \\
-    \texttt{posix\_mq}        & 8.746          & 9.073 & 10.751 & 13.212 & 8.824 $\pm$ 0.007 \\
-    \texttt{shm (io\_uring)}  & 9.855          & 10.119 & 12.056 & 15.679 & 9.923 $\pm$ 0.005 \\
-    \texttt{unix\_socket}     & 11.864         & 12.657 & 13.609 & 19.349 & 11.093 $\pm$ 0.016 \\
-    \texttt{shm (io\_uring SQPOLL)}$^\dagger$ & 31.298 & 32.053 & 1700.290 & 3353.340 & 61.712 $\pm$ 2.406 \\
+    \texttt{shm (adaptive)}   & \textbf{1.124} & 1.160 & 1.219 & 2.867 & 1.130 $\pm$ 0.001 \\
+    \texttt{shm (busy\_poll)} & 1.156          & 1.192 & 1.239 & 2.757 & 1.155 $\pm$ 0.001 \\
+    \texttt{shm (spin\_back)} & 1.335          & 1.373 & 1.471 & 3.000 & 1.330 $\pm$ 0.001 \\
+    \texttt{shm (eventfd)}    & 3.398          & 3.574 & 4.357 & 6.071 & 3.467 $\pm$ 0.030 \\
+    \texttt{shm (futex)}      & 3.390          & 4.053 & 5.023 & 8.107 & 3.603 $\pm$ 0.064 \\
+    \texttt{pipe}             & 3.634          & 3.824 & 4.937 & 7.293 & 3.719 $\pm$ 0.012 \\
+    \texttt{posix\_mq}        & 4.408          & 4.580 & 5.597 & 7.063 & 4.469 $\pm$ 0.021 \\
+    \texttt{shm (io\_uring)}  & 5.004          & 5.156 & 6.795 & 8.765 & 5.153 $\pm$ 0.092 \\
+    \texttt{unix\_socket}     & 6.063          & 6.428 & 7.118 & 10.059 & 6.058 $\pm$ 0.011 \\
+    \texttt{shm (io\_uring SQPOLL)} & 7.590 & 7.902 & 10.787 & 1518.780 & 15.439 $\pm$ 0.853 \\
     \midrule
     \multicolumn{6}{@{}l}{\emph{Message Size: 64\,KiB --- lower is better}} \\[1pt]
-    \texttt{shm (busy\_poll)} & \textbf{23.293} & 23.845 & 26.982 & 48.473 & 23.280 $\pm$ 0.038 \\
-    \texttt{shm (adaptive)}   & 23.888          & 24.006 & 25.829 & 27.300 & 23.858 $\pm$ 0.013 \\
-    \texttt{shm (spin\_back)} & 24.203          & 24.293 & 25.939 & 27.925 & 24.155 $\pm$ 0.014 \\
-    \texttt{shm (eventfd)}    & 27.244          & 27.478 & 29.342 & 31.348 & 27.228 $\pm$ 0.014 \\
-    \texttt{shm (futex)}      & 27.227          & 27.464 & 29.242 & 31.836 & 27.216 $\pm$ 0.019 \\
-    \texttt{unix\_socket}     & 28.284          & 29.270 & 32.880 & 37.986 & 28.362 $\pm$ 0.022 \\
-    \texttt{shm (io\_uring)}  & 29.409          & 29.689 & 31.802 & 33.743 & 29.262 $\pm$ 0.019 \\
-    \texttt{pipe}             & 35.861          & 36.380 & 40.106 & 41.696 & 35.935 $\pm$ 0.017 \\
-    \texttt{posix\_mq}        & 35.869          & 36.721 & 39.651 & 42.714 & 35.988 $\pm$ 0.038 \\
-    \texttt{shm (io\_uring SQPOLL)}$^\dagger$ & 59.188 & 61.154 & 2713.710 & 3497.240 & 116.195 $\pm$ 7.386 \\
+    \texttt{shm (busy\_poll)} & \textbf{11.848} & 11.957 & 12.895 & 14.390 & 11.824 $\pm$ 0.008 \\
+    \texttt{shm (adaptive)}   & 11.947          & 12.013 & 13.072 & 14.076 & 11.928 $\pm$ 0.008 \\
+    \texttt{shm (spin\_back)} & 12.105          & 12.152 & 13.164 & 15.263 & 12.080 $\pm$ 0.008 \\
+    \texttt{shm (futex)}      & 13.651          & 14.338 & 16.103 & 20.667 & 13.581 $\pm$ 0.017 \\
+    \texttt{shm (eventfd)}    & 14.791          & 21.758 & 33.180 & 110.620 & 16.692 $\pm$ 0.381 \\
+    \texttt{unix\_socket}     & 14.793          & 17.163 & 19.825 & 24.540 & 15.713 $\pm$ 0.376 \\
+    \texttt{shm (io\_uring)}  & 14.854          & 14.999 & 16.704 & 21.883 & 15.023 $\pm$ 0.300 \\
+    \texttt{pipe}             & 18.060          & 18.415 & 20.713 & 24.458 & 18.137 $\pm$ 0.016 \\
+    \texttt{posix\_mq}        & N/A             & N/A & N/A & N/A & N/A \\
+    \texttt{shm (io\_uring SQPOLL)} & 14.262 & 15.150 & 818.708 & 1623.410 & 28.588 $\pm$ 2.553 \\
     \midrule
     \multicolumn{6}{@{}l}{\emph{Message Size: 1\,MiB --- lower is better}} \\[1pt]
-    \texttt{unix\_socket}     & \textbf{241.094} & 248.331 & 261.743 & 365.375 & 242.922 $\pm$ 0.291 \\
-    \texttt{shm (busy\_poll)} & 267.243          & 276.180 & 285.295 & 295.643 & 269.615 $\pm$ 0.205 \\
-    \texttt{shm (spin\_back)} & 267.366          & 276.029 & 285.168 & 297.980 & 269.596 $\pm$ 0.203 \\
-    \texttt{shm (eventfd)}    & 276.786          & 283.946 & 297.494 & 327.397 & 278.874 $\pm$ 0.316 \\
-    \texttt{shm (futex)}      & 278.034          & 286.596 & 296.704 & 335.171 & 280.502 $\pm$ 0.236 \\
-    \texttt{shm (adaptive)}   & 278.976          & 288.360 & 300.819 & 314.115 & 282.830 $\pm$ 2.696 \\
-    \texttt{shm (io\_uring)}  & 281.154          & 289.455 & 301.202 & 335.805 & 283.185 $\pm$ 0.256 \\
-    \texttt{pipe}             & 473.293          & 482.965 & 542.826 & 1429.330 & 479.538 $\pm$ 3.410 \\
+    \texttt{unix\_socket}     & \textbf{122.353} & 125.936 & 129.282 & 134.103 & 123.043 $\pm$ 0.086 \\
+    \texttt{shm (busy\_poll)} & 134.712          & 139.938 & 146.149 & 152.020 & 135.735 $\pm$ 0.139 \\
+    \texttt{shm (spin\_back)} & 138.311          & 149.811 & 160.231 & 169.930 & 140.585 $\pm$ 0.276 \\
+    \texttt{shm (adaptive)}   & 140.755          & 151.248 & 203.329 & 1045.710 & 147.414 $\pm$ 2.376 \\
+    \texttt{shm (io\_uring)}  & 150.690          & 193.104 & 244.364 & 373.538 & 162.969 $\pm$ 1.159 \\
+    \texttt{shm (eventfd)}    & 163.289          & 182.655 & 201.130 & 232.149 & 164.111 $\pm$ 0.738 \\
+    \texttt{shm (futex)}      & 164.144          & 206.372 & 428.928 & 1124.960 & 175.985 $\pm$ 3.055 \\
+    \texttt{shm (io\_uring SQPOLL)} & 145.616 & 819.006 & 1773.440 & 1938.180 & 282.603 $\pm$ 16.470 \\
+    \texttt{pipe}             & 331.466          & 364.151 & 402.091 & 692.353 & 328.037 $\pm$ 1.937 \\
     \texttt{posix\_mq}        & N/A              & N/A     & N/A     & N/A     & N/A \\
-    \texttt{shm (io\_uring SQPOLL)}$^\dagger$ & 620.232 & 2840.710 & 3721.520 & 4087.680 & 1132.960 $\pm$ 42.425 \\
     \bottomrule
   \end{tabular}}
 \end{table}
 
 \textbf{Key observations:}
 
-\textbf{(1) 14.5$\times$ spinning advantage at small messages.}
-At 64\,B, \texttt{adaptive} (0.345\,$\mu$s) and \texttt{busy\_poll}
-(0.381\,$\mu$s) are at least 13$\times$ lower than any kernel-sleeping variant;
-adaptive is 14.5$\times$ lower than futex. This
+\textbf{(1) 12.1--13.8$\times$ spinning advantage at small messages.}
+At 64\,B, \texttt{busy\_poll} (0.185\,$\mu$s) and \texttt{adaptive}
+(0.211\,$\mu$s) are at least 12$\times$ lower than any kernel-sleeping variant;
+busy polling is 13.8$\times$ lower than futex. This
 gap includes the system call, scheduler wakeup, and context-switch path needed
 to resume a sleeping consumer.
 
 \textbf{(2) Kernel-sleeping variants remain in the same latency class.}
-\texttt{futex} (5.001\,$\mu$s), \texttt{eventfd} (5.039\,$\mu$s), and
-\texttt{io\_uring} (8.150\,$\mu$s) span 5.0--8.2\,$\mu$s P50 at 64\,B.
+\texttt{futex} (2.562\,$\mu$s), \texttt{eventfd} (2.602\,$\mu$s), and
+\texttt{io\_uring} (4.173\,$\mu$s) span 2.6--4.2\,$\mu$s P50 at 64\,B.
 The higher \texttt{io\_uring} value is consistent with additional SQ/CQ ring
 management. These figures come from the canonical 100,000-trip distributions.
 
-\textbf{(3) POSIX MQ is valid through 64\,KiB in the recorded run.}
-The repository's 64\,KiB summary records 10,000 round trips (P50 35.869\,$\mu$s).
-The 256\,KiB and 1\,MiB rows are explicitly marked unsupported by the host
+\textbf{(3) POSIX MQ is valid through 4\,KiB in the recorded run.}
+The repository's 4\,KiB summary records 50,000 round trips (P50 4.408\,$\mu$s).
+The 16\,KiB and larger rows are explicitly marked unsupported by the host
 POSIX-MQ message-size limit and are reported as N/A.
 
 \textbf{(4) UNIX Socket wins at 1\,MiB.}
-241.09\,$\mu$s vs.\ 267.2--281.2\,$\mu$s for SHM variants.  On this host,
+122.35\,$\mu$s vs.\ 134.7--176.0\,$\mu$s for SHM variants.  On this host,
 the socket's buffering path outperforms the fixed-slot SHM configuration at
 this payload size, but the experiment does not isolate a kernel cause or repeat
 the comparison beyond 2\,000 rounds.  It is therefore a host-specific
 observation, not a general transport recommendation.
 
-\textbf{(5) SQPOLL protocol coverage is complete, but cross-host comparison is excluded.}
-The supplementary SQPOLL run completed all size-scaled Suite~2 samples,
-including 10\,000 rounds at 64\,KiB and 2\,000 at 1\,MiB.  Its substantially
-higher P50 values and millisecond-scale tails are reported for provenance, but
-the host differs from the i5-12500H reference host; therefore these
-values do not support a claim that SQPOLL is faster or slower than
-interrupt-mode \texttt{io\_uring}, \texttt{futex}, or \texttt{eventfd} in
-the primary comparison.
+\textbf{(5) SQPOLL-assisted signaling has low central latency but large tails.}
+The SQPOLL-assisted signal-mode run completed all size-scaled Suite~2 samples,
+including 10\,000 rounds at 64\,KiB and 2\,000 at 1\,MiB.  Its 64\,B P50 is
+6.912\,$\mu$s, but its P99.9 reaches 1.485\,ms.  Since the blocking read/wait
+ring remains interrupt-mode to avoid deadlock, this result does not establish
+a fully syscall-free SQPOLL end-to-end path.
 
 \subsection{Ablation: Wakeup Variant Comparison (Suite 2)}
 
-At 1\,MiB, all six SHM variants converge near 267--281\,$\mu$s
+At 1\,MiB, the six primary SHM variants span 134.7--176.0\,$\mu$s
 (Table~\ref{tab:pingpong}). Copying 1\,MiB across the ring
 dominates all wakeup mechanism overhead in this configuration.  Wakeup
 selection may matter less when message service time is payload-dominated.
@@ -751,17 +752,17 @@ visualises the full size sweep.
 \textbf{(1) Saturated throughput is primarily data-path bound.}
 Under fully saturated load the ring rarely empties, so the wakeup primitive is
 rarely invoked.  The six variants remain in the same order of magnitude, with
-the refreshed 64\,KiB results spanning 13.37--15.75\,GiB/s.
+the controlled 64\,KiB results spanning 13.37--15.75\,GiB/s.
 
 \textbf{(2) The controlled io\_uring result is 13.37\,GiB/s at 64\,KiB.}
 This controlled result is used for the paper's throughput conclusions.
 
 \textbf{(3) Large messages converge.}
-At 1\,MiB the six refreshed variants span 8.12--8.65\,GiB/s.  Payload copying
+At 1\,MiB the six controlled variants span 8.12--8.65\,GiB/s.  Payload copying
 and the fixed 64-slot ring dominate the wakeup mechanism at this size.
 
 \textbf{(4) Small-message io\_uring overhead at 64\,B.}
-At 64\,B payload, the refreshed variants span 0.262--0.344\,GiB/s.  This
+At 64\,B payload, the controlled variants span 0.262--0.344\,GiB/s.  This
 variation reflects fixed per-message coordination overhead. At 4\,KiB and
 above, payload copying dominates the observed throughput range.
 
@@ -778,7 +779,8 @@ before each burst.  Table~\ref{tab:bursty} isolates wakeup latency per variant.
 
 \begin{table}[!t]
   \centering
-  \caption{Bursty-Regime Wakeup and End-to-End Latencies at 64\,B}
+  \caption{Bursty-Regime Results at 64\,B. Entries are means of the 15
+    run-level P50 or CPU-time values.}
   \label{tab:bursty}
   \small
   \resizebox{\columnwidth}{!}{%
@@ -840,7 +842,8 @@ wakeup advantage or use it as a comparative latency result.
 
 \begin{table}[!t]
   \centering
-  \caption{Offered-Load Sweep: Median Wakeup Latency ($\mu$s) at 64\,B.}
+  \caption{Offered-Load Sweep at 64\,B: Mean of 15 Run-Level Wakeup
+    P50 Values ($\mu$s).}
   \label{tab:offeredload}
   \small
   \begin{tabular}{@{}lrrrrr@{}}
@@ -957,7 +960,7 @@ prevents \texttt{head} and \texttt{tail} from sharing a cache line.
 For a single SPSC ring channel, the completed depth-1 experiment shows that
 interrupt-mode \texttt{io\_uring} does not reduce the measured per-event cost
 relative to the simpler blocking mechanisms.  At 64\,B it produces a
-8.15\,$\mu$s P50, versus \texttt{futex}'s 5.00\,$\mu$s, consistent
+4.17\,$\mu$s P50, versus \texttt{futex}'s 2.56\,$\mu$s, consistent
 with SQE/CQE submission overhead.  The bursty observations place all three
 kernel-sleeping variants in a similar range under recorded fixed-frequency
 settings.  The SQPOLL result is also close, so this workload exposes no
@@ -968,8 +971,9 @@ The primary performance advantage of SHM-based IPC originates entirely from repl
 kernel-copy data paths with shared-memory \texttt{memcpy}---not from the wakeup
 primitive.  Performance breaks down into a two-layer stack:
 \begin{itemize}
-  \item \textbf{Data path} (dominant): shared memory vs.\ kernel-copy.  Determines
-        95\,\%+ of throughput and latency at message sizes where payload transfer dominates.
+  \item \textbf{Data path} (dominant): shared memory vs.\ kernel-copy.  It
+        determines the observed throughput ordering at message sizes where
+        payload transfer dominates.
   \item \textbf{Wakeup layer} (secondary): spinning vs.\ blocking.  Dominates only
         when the ring is genuinely empty between bursts.
 \end{itemize}
@@ -983,8 +987,8 @@ that can remove the submission syscall via \texttt{IORING\_SETUP\_SQPOLL}.
 \subsection{Architectural Guidance by Use Case}
 
 \paragraph{High-Frequency Trading / Sub-$\mu$s Latency.}
-Use SHM ring with \texttt{busy\_poll} or \texttt{adaptive}.  Both achieve
-P50~$\approx$~345\,ns and P99~$\leq$~1.2\,$\mu$s at 64\,B.  Busy polling
+Use SHM ring with \texttt{busy\_poll} or \texttt{adaptive}.  Their 64\,B
+P50 values are 185 and 211\,ns, respectively, with P99 below 0.27\,$\mu$s. Busy polling
 requires a dedicated spinning core; adaptive waiting blocks after its spin window.
 \texttt{adaptive} is preferred for intermittent workloads: it spins for up to
 500 iterations and falls back to
@@ -993,7 +997,7 @@ time during burst-idle operation while preserving the hot path.
 
 \paragraph{Cloud Microservices / CPU-Time-Constrained Environments.}
 Use SHM ring with \texttt{futex} or \texttt{eventfd}.  Both use blocking
-waits and deliver approximately 5\,$\mu$s P50 and sub-6.5\,$\mu$s P99 at
+waits and deliver approximately 2.6\,$\mu$s P50 and sub-4.2\,$\mu$s P99 at
 64\,B in depth-1 ping-pong. \texttt{eventfd} integrates naturally
 into existing \texttt{poll}/\texttt{epoll} event loops without futex-specific
 code, making it the lower-friction choice for retrofit into existing stacks.
@@ -1001,7 +1005,7 @@ code, making it the lower-friction choice for retrofit into existing stacks.
 \paragraph{Async Event-Driven Frameworks.}
 Use SHM ring with \texttt{io\_uring}.  Wakeup latency matches
 \texttt{futex}/\texttt{eventfd} within the same kernel-sleeping class
-(5.0--8.2\,$\mu$s P50), but
+(2.6--4.2\,$\mu$s P50), but
 the \texttt{io\_uring} context unifies IPC ring monitoring with network I/O,
 disk I/O, and timer events in a single \texttt{submit\_and\_wait} call.  This
 eliminates the complexity of maintaining parallel \texttt{epoll} and
@@ -1009,14 +1013,14 @@ eliminates the complexity of maintaining parallel \texttt{epoll} and
 
 \paragraph{Large Payloads ($>$1\,MiB) or Deep Buffering.}
 Treat the UNIX-socket result as a follow-up candidate, not a default choice.
-At 1\,MiB, UNIX Socket achieves 241.1\,$\mu$s P50 versus 267.2--281.2\,$\mu$s
+At 1\,MiB, UNIX Socket achieves 122.4\,$\mu$s P50 versus 134.7--176.0\,$\mu$s
 for SHM ring variants on this host.  Because the comparison has only 2\,000
 rounds and lacks copy-path and syscall profiling, its cause and generality
 remain unestablished.
 
 \subsection{Ring-Depth Constraint at 1 MiB}
 
-At 1\,MiB, the refreshed saturated ablation variants span
+At 1\,MiB, the controlled saturated ablation variants span
 8.12--8.65\,GiB/s.  This convergence is consistent with the fixed 64-slot
 ring geometry, although the current experiment does not include a controlled
 ring-depth sweep.
@@ -1031,10 +1035,9 @@ separate that capacity effect from copy bandwidth, checksum cost, or socket
 buffering, so the ring-depth explanation remains a hypothesis rather than a
 demonstrated causal result.
 
-\textbf{No refreshed interrupt-mode outlier.}  In the refreshed saturated
+\textbf{No controlled interrupt-mode outlier.}  In the controlled saturated
 ablation, interrupt-mode \texttt{io\_uring} reaches 8.12\,GiB/s at 1\,MiB,
-within the 8.12--8.65\,GiB/s range of all six variants.  The earlier 4.66\,GiB/s
-value is not used for the final conclusions.
+within the 8.12--8.65\,GiB/s range of all six variants.
 
 Increasing \texttt{NUM\_SLOTS} to 256 would raise in-flight capacity to
 256\,MiB.  A controlled depth sweep is required to determine whether that
@@ -1088,14 +1091,14 @@ requires a multi-ring architecture outside the scope of this study.
         \texttt{CLOCK\_MONOTONIC\_RAW} timestamps on the initiator core.
 
   \item \textbf{POSIX MQ coverage.}  The recorded configuration includes a
-        valid 64\,KiB run.  The 256\,KiB and 1\,MiB rows are marked
+        valid 4\,KiB run.  The 16\,KiB and larger rows are marked
         \texttt{unsupported} because of the host message-size limit.
 
   \item \textbf{SQPOLL scope.}  SQPOLL is evaluated as a separate 64-slot,
         single-channel configuration.  Its result does not generalize to
         multi-FD batching or other SQPOLL thread-affinity choices.  The
-        completed Suite~2 SQPOLL replication is from a separately documented
-        Linux host and is not used for cross-host rankings.  Its
+        completed Suite~2 SQPOLL-assisted signal-mode run uses the reference
+        host, but retains interrupt-mode blocking reads to avoid deadlock. Its
         anomalously low Suite~1 E2E median is not used as a comparative result
         because the current instrumentation cannot explain its queue-residence
         difference.
@@ -1119,7 +1122,7 @@ we isolated the true contribution of \texttt{io\_uring} to IPC latency.
 
 \begin{enumerate}
   \item \textbf{The shared-memory data path drives the performance gains.}
-        Spinning on a cache-aligned ring delivers 345\,ns P50 at 64\,B.
+        Spinning on a cache-aligned ring delivers 185\,ns P50 at 64\,B.
         In the controlled saturated ablation, the six primary variants reach
         13.37--15.75\,GiB/s at 64\,KiB.
 
@@ -1131,8 +1134,9 @@ we isolated the true contribution of \texttt{io\_uring} to IPC latency.
         wakeup result in this single-channel design.
 
   \item \textbf{Spinning variants dominate sub-$\mu$s latency requirements.}
-        \texttt{adaptive} is the preferred choice: it achieves 345\,ns
-        hot-path latency and lowers recorded CPU time during idle periods.
+        \texttt{adaptive} balances latency and CPU time: it achieves 211\,ns
+        P50 and lowers recorded CPU time during idle periods relative to
+        continuous busy polling.
         This study does not measure energy or package power.
 
   \item \textbf{The 1\,MiB throughput convergence may reflect ring depth.}

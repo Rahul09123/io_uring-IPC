@@ -63,8 +63,10 @@ Streaming latency can include queue residence time and is not interchangeable wi
 
 The ping-pong suite creates two queues per size and uses size-scaled round counts. In the canonical root summaries:
 
-- POSIX MQ completed through 64 KiB; the 64 KiB run contains 10,000 round trips.
-- POSIX MQ at 1 MiB is `N/A` because that configuration did not complete under the recorded kernel message-size environment.
+- POSIX MQ completed through 4 KiB; the 4 KiB run contains 50,000 round trips.
+- The 16 KiB and larger rows are `unsupported` because those configurations
+  exceed the recorded host's message-size limit, and the report displays them
+  as `N/A`.
 
 The standalone harness's privileged tuning does not make an absent ping-pong observation valid. To replace `N/A`, configure the new host, record its environment, rerun `src/pingpong/run_pingpong.sh --ipc posix_mq`, and retain the resulting status field.
 
