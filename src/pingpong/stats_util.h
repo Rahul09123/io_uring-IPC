@@ -3,8 +3,9 @@
 
 // ── Latency distribution calculator for ping-pong benchmarks ─────────────────
 //
-// Input  : vector of RTT values in nanoseconds (raw, including warmup)
-// Output : PPStats struct with all percentiles in microseconds
+// Input  : vector of RTT values in nanoseconds after warmup removal.
+// Output : PPStats struct with all percentiles as one-way (single-trip)
+//          latency in microseconds, i.e., RTT / 2.
 //
 // Statistics reported:
 //  mean, median (p50), p90, p99, p99.9 (p999)
@@ -46,11 +47,13 @@ static inline PPStats compute_pp_stats(const std::vector<uint64_t>& rtt_ns) {
     PPStats s{};
     if (rtt_ns.empty()) return s;
 
-    // Convert to µs, filter negatives / outlier zeros
+    // Convert RTT nanoseconds to one-way microseconds and filter zero values.
+    // The initiator timestamps the complete request/echo round trip, so each
+    // reported latency statistic must be scaled by 1/2 to represent one trip.
     std::vector<double> us;
     us.reserve(rtt_ns.size());
     for (uint64_t v : rtt_ns) {
-        double us_val = static_cast<double>(v) / 1000.0;
+        double us_val = static_cast<double>(v) / 2000.0;
         if (us_val > 0.0)
             us.push_back(us_val);
     }

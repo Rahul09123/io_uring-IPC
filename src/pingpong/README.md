@@ -23,8 +23,12 @@ Using one clock avoids cross-core timestamp subtraction. CPU affinity reduces sc
 - `pp_ablation.cpp`: shared-memory ring across busy poll, spin backoff, adaptive, futex, eventfd, and interrupt-mode `io_uring`
 
 SQPOLL is evaluated by the throughput/wakeup ablation and can also be run as a
-separate depth-1 `shm_io_uring` configuration.  It is never mixed into the
-primary six-variant ablation table; its summary is written separately.
+separate depth-1 `shm_io_uring` configuration. With `--sqpoll`, both the FIFO
+read/wait ring and write/signal ring are created with `IORING_SETUP_SQPOLL` on
+both benchmark processes. Completion waiting may still enter the kernel; this
+benchmark therefore measures full SQPOLL ring setup, not a guarantee of a
+syscall-free end-to-end exchange. It is never mixed into the primary
+six-variant ablation table; its summary is written separately.
 
 ## Payloads and measured rounds
 
@@ -65,6 +69,10 @@ bash run_pingpong.sh --ipc posix_mq
 bash run_pingpong.sh --ipc shm_ablation --variant futex --variant io_uring
 bash run_pingpong.sh --require-fixed-frequency --ipc shm_io_uring --sqpoll
 ```
+
+After changing the timing or SQPOLL code, rerun every Suite 2 transport before
+using `data/pingpong_results.csv` or Table V: summary values from an earlier
+binary are not comparable with the corrected one-way-latency output.
 
 Accepted IPC names are `pipe`, `unix_socket`, `shm_io_uring`, `posix_mq`, and `shm_ablation`.
 
