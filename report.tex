@@ -562,9 +562,19 @@ ping-pong runs were collected on the native Linux host with Core~1 and Core~2
 pinned, the \texttt{performance} governor on both cores, and
 \texttt{intel\_pstate.no\_turbo=1}.  These settings are recorded in
 \texttt{data/environment\_ablation.txt} and
-\texttt{data/environment\_pingpong.txt}.  Core isolation through
+\texttt{data/environment\_pingpong\_primary.txt}.  Core isolation through
 \texttt{isolcpus}/\texttt{nohz\_full} was not used; residual scheduler and
 idle-state effects therefore remain a limitation.
+
+\textbf{Supplementary SQPOLL replication.}  The completed Suite~2 SQPOLL
+configuration was run separately on a native Linux host (Linux 6.17.0-23),
+with logical CPUs~1 and~2 pinned,
+the \texttt{performance} governor, and
+\texttt{intel\_pstate.no\_turbo=1}; its record is
+\texttt{data/environment\_pingpong.txt}.  It establishes that the SQPOLL
+configuration completes under the documented protocol, but its absolute
+latency is not used to rank mechanisms measured on the i5-12500H reference
+host.
 
 \subsection{Statistical Methodology}
 
@@ -605,7 +615,7 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
 
 \begin{table}[!t]
   \centering
-  \caption{Single-Trip Ping-Pong Latency Distributions ($\mu$s). Sample counts are 100\,000 (64\,B), 50\,000 (4\,KiB), 10\,000 (64\,KiB), and 2\,000 (1\,MiB). Each row reports P50, P90, P99, P99.9, and mean $\pm$ 95\% CI from the canonical root summary CSVs.}
+\caption{Single-Trip Ping-Pong Latency Distributions ($\mu$s). Sample counts are 100\,000 (64\,B), 50\,000 (4\,KiB), 10\,000 (64\,KiB), and 2\,000 (1\,MiB). Each row reports P50, P90, P99, P99.9, and mean $\pm$ 95\% CI from the canonical root summary CSVs. Rows marked $^\dagger$ are the supplementary frequency-controlled SQPOLL run on a separate Linux host and are not used for cross-host rankings.}
   \label{tab:pingpong}
   \resizebox{\columnwidth}{!}{%
   \small
@@ -623,6 +633,7 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
     \texttt{posix\_mq}        & 5.567          & 5.685 & 7.361 & 9.824 & 5.629 $\pm$ 0.002 \\
     \texttt{unix\_socket}     & 5.496          & 7.214 & 8.196 & 11.330 & 5.900 $\pm$ 0.017 \\
     \texttt{shm (io\_uring)}  & 8.150          & 8.426 & 10.351 & 14.347 & 8.236 $\pm$ 0.003 \\
+    \texttt{shm (io\_uring SQPOLL)}$^\dagger$ & 28.079 & 28.790 & 1283.530 & 3309.630 & 55.317 $\pm$ 1.621 \\
     \midrule
     \multicolumn{6}{@{}l}{\emph{Message Size: 4\,KiB --- lower is better}} \\[1pt]
     \texttt{shm (adaptive)}   & \textbf{2.263} & 2.339 & 2.422 & 5.072 & 2.271 $\pm$ 0.001 \\
@@ -634,6 +645,7 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
     \texttt{posix\_mq}        & 8.746          & 9.073 & 10.751 & 13.212 & 8.824 $\pm$ 0.007 \\
     \texttt{shm (io\_uring)}  & 9.855          & 10.119 & 12.056 & 15.679 & 9.923 $\pm$ 0.005 \\
     \texttt{unix\_socket}     & 11.864         & 12.657 & 13.609 & 19.349 & 11.093 $\pm$ 0.016 \\
+    \texttt{shm (io\_uring SQPOLL)}$^\dagger$ & 31.298 & 32.053 & 1700.290 & 3353.340 & 61.712 $\pm$ 2.406 \\
     \midrule
     \multicolumn{6}{@{}l}{\emph{Message Size: 64\,KiB --- lower is better}} \\[1pt]
     \texttt{shm (busy\_poll)} & \textbf{23.293} & 23.845 & 26.982 & 48.473 & 23.280 $\pm$ 0.038 \\
@@ -645,6 +657,7 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
     \texttt{shm (io\_uring)}  & 29.409          & 29.689 & 31.802 & 33.743 & 29.262 $\pm$ 0.019 \\
     \texttt{pipe}             & 35.861          & 36.380 & 40.106 & 41.696 & 35.935 $\pm$ 0.017 \\
     \texttt{posix\_mq}        & 35.869          & 36.721 & 39.651 & 42.714 & 35.988 $\pm$ 0.038 \\
+    \texttt{shm (io\_uring SQPOLL)}$^\dagger$ & 59.188 & 61.154 & 2713.710 & 3497.240 & 116.195 $\pm$ 7.386 \\
     \midrule
     \multicolumn{6}{@{}l}{\emph{Message Size: 1\,MiB --- lower is better}} \\[1pt]
     \texttt{unix\_socket}     & \textbf{241.094} & 248.331 & 261.743 & 365.375 & 242.922 $\pm$ 0.291 \\
@@ -656,6 +669,7 @@ Table~\ref{tab:pingpong} reports single-trip latency distributions (P50, P90, P9
     \texttt{shm (io\_uring)}  & 281.154          & 289.455 & 301.202 & 335.805 & 283.185 $\pm$ 0.256 \\
     \texttt{pipe}             & 473.293          & 482.965 & 542.826 & 1429.330 & 479.538 $\pm$ 3.410 \\
     \texttt{posix\_mq}        & N/A              & N/A     & N/A     & N/A     & N/A \\
+    \texttt{shm (io\_uring SQPOLL)}$^\dagger$ & 620.232 & 2840.710 & 3721.520 & 4087.680 & 1132.960 $\pm$ 42.425 \\
     \bottomrule
   \end{tabular}}
 \end{table}
@@ -686,6 +700,15 @@ the socket's buffering path outperforms the fixed-slot SHM configuration at
 this payload size, but the experiment does not isolate a kernel cause or repeat
 the comparison beyond 2\,000 rounds.  It is therefore a host-specific
 observation, not a general transport recommendation.
+
+\textbf{(5) SQPOLL protocol coverage is complete, but cross-host comparison is excluded.}
+The supplementary SQPOLL run completed all size-scaled Suite~2 samples,
+including 10\,000 rounds at 64\,KiB and 2\,000 at 1\,MiB.  Its substantially
+higher P50 values and millisecond-scale tails are reported for provenance, but
+the host differs from the i5-12500H reference host; therefore these
+values do not support a claim that SQPOLL is faster or slower than
+interrupt-mode \texttt{io\_uring}, \texttt{futex}, or \texttt{eventfd} in
+the primary comparison.
 
 \subsection{Ablation: Wakeup Variant Comparison (Suite 2)}
 
@@ -885,6 +908,11 @@ size-scaled 16/128/512\,MiB runs, and wakeup telemetry.  Figure~\ref{fig:through
 and the throughput conclusions report this controlled ablation.  Kernel-mediated
 transports are compared against the ring using the controlled depth-1 latency
 suite in Table~\ref{tab:pingpong}.
+An earlier direct-transport harness recorded a higher 64\,KiB
+\texttt{io\_uring} throughput value (28.17\,GiB/s), but it used a different
+workload and lacks matching fixed-frequency environment records.  Because the
+difference cannot be attributed to a single factor, that result is excluded
+from the paper's cross-mechanism conclusions.
 
 \begin{figure}[!t]
   \centering
@@ -1065,7 +1093,9 @@ requires a multi-ring architecture outside the scope of this study.
 
   \item \textbf{SQPOLL scope.}  SQPOLL is evaluated as a separate 64-slot,
         single-channel configuration.  Its result does not generalize to
-        multi-FD batching or other SQPOLL thread-affinity choices.  Its
+        multi-FD batching or other SQPOLL thread-affinity choices.  The
+        completed Suite~2 SQPOLL replication is from a separately documented
+        Linux host and is not used for cross-host rankings.  Its
         anomalously low Suite~1 E2E median is not used as a comparative result
         because the current instrumentation cannot explain its queue-residence
         difference.
