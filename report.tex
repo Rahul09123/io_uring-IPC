@@ -424,7 +424,7 @@ kernel calls required by the selected wait path.
 
 To isolate the contribution of the wakeup mechanism, we implement six
 interchangeable wakeup modules on a single, bit-identical SPSC ring buffer data
-structure.  Each primitive is invoked via its standard Linux kernel system
+structure for Suite~1.  Each primitive is invoked via its standard Linux kernel system
 interface (Linux man-pages~\cite{linux-man}): Only the
 functions \texttt{consumer\_wait()} and \texttt{producer\_signal()} differ,
 guaranteeing that any observed latency difference is attributable solely to
@@ -477,7 +477,7 @@ permits SQPOLL operation.
 
 \begin{table}[!t]
   \centering
-  \caption{Wakeup Mechanism Properties Summary}
+\caption{Suite 1 Wakeup Mechanism Properties Summary}
   \label{tab:wakeup}
   \small
   \resizebox{\columnwidth}{!}{%
@@ -513,6 +513,9 @@ Suite~1 timestamps are collected on the pinned producer and consumer with
 \textbf{Suite 2 --- Corrected Depth-1 Ping-Pong.}
 Queue depth is strictly enforced to~1: the initiator sends one message and
 blocks waiting for the echo server to reflect it before sending the next.
+Suite~2 uses a separate ping-pong implementation: its io\_uring reader
+submits the FIFO read directly through \texttt{io\_uring\_submit\_and\_wait}
+and does not use Suite~1's \texttt{poll()} readiness gate.
 Unlike Suite~1, both latency endpoints are timestamped on one core.
 Both $t_{\text{start}}$ and $t_{\text{end}}$ are recorded on
 \textbf{Initiator Core~1} using
@@ -592,8 +595,6 @@ single best run. For each (mechanism, payload size) pair we compute:
 where $N=15$ is the Suite~1 run count and $M$ is the number of measured
 round trips in Suite~2.  Ping-pong 95\,\% confidence intervals use
 $\bar{L} \pm 1.96\sigma_L/\sqrt{M}$, matching the published analysis code.
-
-\subsection{Workload Volumes}
 
 \begin{table}[!t]
   \centering
@@ -698,7 +699,8 @@ The 16\,KiB and larger rows are explicitly marked unsupported by the host
 POSIX-MQ message-size limit and are reported as N/A.
 
 \textbf{(4) UNIX Socket wins at 1\,MiB.}
-122.35\,$\mu$s vs.\ 134.7--176.0\,$\mu$s for SHM variants.  On this host,
+122.35\,$\mu$s vs.\ 134.7--164.1\,$\mu$s P50 for the six primary SHM
+variants.  On this host,
 the socket's buffering path outperforms the fixed-slot SHM configuration at
 this payload size, but the experiment does not isolate a kernel cause or repeat
 the comparison beyond 2\,000 rounds.  It is therefore a host-specific
@@ -711,12 +713,9 @@ including 10\,000 rounds at 64\,KiB and 2\,000 at 1\,MiB.  Its 64\,B P50 is
 ring remains interrupt-mode to avoid deadlock, this result does not establish
 a fully syscall-free SQPOLL end-to-end path.
 
-\subsection{Ablation: Wakeup Variant Comparison (Suite 2)}
-
-At 1\,MiB, the six primary SHM variants span 134.7--176.0\,$\mu$s
-(Table~\ref{tab:pingpong}). Copying 1\,MiB across the ring
-dominates all wakeup mechanism overhead in this configuration.  Wakeup
-selection may matter less when message service time is payload-dominated.
+At 64\,KiB, eventfd's P99/P99.9 (33.180/110.620\,$\mu$s) exceed its
+14.791\,$\mu$s P50; the source is untraced and is not attributed to the
+primitive.
 
 \subsection{Streaming Throughput: Saturated Regime (Suite 1)}
 
@@ -1013,7 +1012,7 @@ eliminates the complexity of maintaining parallel \texttt{epoll} and
 
 \paragraph{Large Payloads ($>$1\,MiB) or Deep Buffering.}
 Treat the UNIX-socket result as a follow-up candidate, not a default choice.
-At 1\,MiB, UNIX Socket achieves 122.4\,$\mu$s P50 versus 134.7--176.0\,$\mu$s
+At 1\,MiB, UNIX Socket achieves 122.4\,$\mu$s P50 versus 134.7--164.1\,$\mu$s
 for SHM ring variants on this host.  Because the comparison has only 2\,000
 rounds and lacks copy-path and syscall profiling, its cause and generality
 remain unestablished.
