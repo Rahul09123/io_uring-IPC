@@ -23,11 +23,11 @@ Using one clock avoids cross-core timestamp subtraction. CPU affinity reduces sc
 - `pp_ablation.cpp`: shared-memory ring across busy poll, spin backoff, adaptive, futex, eventfd, and interrupt-mode `io_uring`
 
 SQPOLL is evaluated by the throughput/wakeup ablation and can also be run as a
-separate depth-1 `shm_io_uring` configuration. With `--sqpoll`, both the FIFO
-read/wait ring and write/signal ring are created with `IORING_SETUP_SQPOLL` on
-both benchmark processes. Completion waiting may still enter the kernel; this
-benchmark therefore measures full SQPOLL ring setup, not a guarantee of a
-syscall-free end-to-end exchange. It is never mixed into the primary
+separate depth-1 `shm_io_uring` configuration. With `--sqpoll`, the FIFO
+write/signal rings use `IORING_SETUP_SQPOLL`; the blocking FIFO read/wait rings
+remain interrupt-mode because SQPOLL reads can stall this depth-1 protocol on
+supported kernels. It therefore measures SQPOLL-assisted signaling, not a
+fully syscall-free end-to-end exchange. It is never mixed into the primary
 six-variant ablation table; its summary is written separately.
 
 ## Payloads and measured rounds
